@@ -1,0 +1,876 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kudostack Admin Hub</title>
+<link rel="icon" type="image/jpeg" href="/logo.jpg">
+<style>
+:root{
+  --blue:#4facfe; --blue2:#2f7fe0; --pink:#ff8ac2; --pink2:#f062aa; --pinkSoft:#ffe1ef;
+  --ink:#111; --card:#fff; --soft:#fff0f7; --red:#ff4757; --green:#2ed573; --purple:#a55eea; --yellow:#ffd60a;
+  --shadow:6px 6px 0 rgba(17,17,17,1); --brd:3px solid #111;
+}
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Segoe UI',system-ui,sans-serif}
+body{background:var(--pinkSoft);color:var(--ink);min-height:100vh;font-weight:600}
+h1,h2,h3,h4{font-weight:800}
+#login{position:fixed;inset:0;background:linear-gradient(135deg,var(--pink),var(--blue));display:flex;align-items:center;justify-content:center;z-index:500;padding:16px}
+#login .box{background:#fff;border:var(--brd);box-shadow:10px 10px 0 #111;border-radius:18px;padding:34px 30px;width:100%;max-width:400px;text-align:center}
+#login .logo{font-size:1.6rem;margin-bottom:4px}
+#login .logo span{background:var(--pink);color:#fff;padding:2px 10px;border-radius:8px;border:var(--brd);display:inline-block;transform:rotate(-2deg)}
+#login p{font-size:.85rem;color:#555;margin-bottom:20px}
+#login input{width:100%;padding:14px;border:var(--brd);border-radius:12px;font-size:1.05rem;font-weight:700;text-align:center;background:var(--soft)}
+#login button{width:100%;margin-top:14px;padding:14px;background:var(--pink);color:#fff;border:var(--brd);border-radius:12px;font-size:1.05rem;font-weight:800;cursor:pointer;box-shadow:var(--shadow)}
+#login button:active{transform:translate(4px,4px);box-shadow:2px 2px 0 #111}
+#login .err{color:var(--red);font-size:.85rem;margin-top:10px;display:none}
+#login .welcome{margin-top:18px;background:var(--soft);border:2px dashed var(--pink);border-radius:12px;padding:12px}
+#login .w-title{font-size:.95rem;font-weight:800;color:var(--pink2);margin-bottom:6px}
+#login .w-sub{font-size:.75rem;color:#777;line-height:1.5}
+#app{display:none}
+header{background:var(--pink);border-bottom:var(--brd);padding:12px 18px;position:sticky;top:0;z-index:40}
+.hrow{max-width:1300px;margin:0 auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.logo{font-size:1.15rem;font-weight:800;display:flex;align-items:center;gap:8px;color:#fff}
+.logo .dot{width:34px;height:34px;background:var(--blue);border:var(--brd);border-radius:10px;display:flex;align-items:center;justify-content:center;box-shadow:3px 3px 0 #111}
+.wa-admin{margin-left:auto;background:#fff;border:var(--brd);border-radius:999px;padding:6px 14px;font-size:.8rem;box-shadow:3px 3px 0 #111}
+.userchip{background:var(--blue);color:#fff;border:var(--brd);border-radius:999px;padding:6px 14px;font-size:.8rem;box-shadow:3px 3px 0 #111}
+.userchip b{cursor:pointer}
+.layout{display:flex;max-width:1300px;margin:0 auto;gap:16px;padding:16px;align-items:flex-start}
+nav{width:210px;flex-shrink:0;background:var(--blue);border:var(--brd);border-radius:16px;padding:12px;box-shadow:var(--shadow);position:sticky;top:86px}
+nav button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:none;background:transparent;padding:12px;border-radius:10px;font-size:.92rem;font-weight:700;cursor:pointer;color:#fff;margin-bottom:4px}
+nav button:hover{background:rgba(255,255,255,.22)}
+nav button.on{background:var(--pink);color:#fff;box-shadow:3px 3px 0 #111;border:2px solid #111}
+nav .foot{margin-top:14px;padding-top:10px;border-top:2px dashed rgba(255,255,255,.4);font-size:.7rem;color:rgba(255,255,255,.8);text-align:center}
+main{flex:1;min-width:0}
+.page{display:none}.page.on{display:block}
+.ptitle{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.ptitle h2{background:#fff;border:var(--brd);border-radius:12px;padding:8px 18px;box-shadow:4px 4px 0 #111;display:inline-block;transform:rotate(-1deg)}
+.ptitle .sp{flex:1}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:14px;margin-bottom:18px}
+.card{background:var(--card);border:var(--brd);border-radius:14px;padding:16px;box-shadow:var(--shadow)}
+.card small{display:block;font-size:.7rem;text-transform:uppercase;letter-spacing:.05em;color:#666;font-weight:700}
+.card b{font-size:1.45rem;font-weight:800;display:block;margin-top:4px}
+.card.c-g b{color:#1a9e4b}.card.c-r b{color:var(--red)}.card.c-b b{color:var(--blue2)}.card.c-p b{color:var(--pink2)}.card.c-y b{color:#c79100}
+.panel{background:var(--card);border:var(--brd);border-radius:16px;padding:18px;box-shadow:var(--shadow);margin-bottom:18px}
+.panel>h3{margin-bottom:12px}
+.btn{border:var(--brd);border-radius:10px;padding:11px 18px;font-size:.9rem;font-weight:800;cursor:pointer;color:#111;background:#fff;box-shadow:4px 4px 0 #111;transition:.1s;text-decoration:none;display:inline-block}
+.btn:active{transform:translate(3px,3px);box-shadow:1px 1px 0 #111}
+.btn.green{background:var(--green)}.btn.blue{background:var(--blue);color:#fff}.btn.red{background:var(--red);color:#fff}.btn.purple{background:var(--purple);color:#fff}.btn.pink{background:var(--pink);color:#fff}
+.btn.sm{padding:6px 10px;font-size:.75rem;border-radius:8px;box-shadow:3px 3px 0 #111}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th{background:var(--pink);color:#fff;border:2px solid #111;padding:9px 10px;text-align:left;font-size:.72rem;text-transform:uppercase;position:sticky;top:0;z-index:2}
+td{border:2px solid #111;padding:8px 6px;background:#fff;vertical-align:middle}
+.tbl-wrap{overflow-x:auto;border:var(--brd);border-radius:12px;box-shadow:var(--shadow)}
+table{table-layout:fixed;word-break:break-word}
+td small{display:block;font-size:.68rem;color:#666}
+.badge{display:inline-block;padding:3px 8px;border-radius:999px;border:2px solid #111;font-size:.66rem;font-weight:800;white-space:normal;line-height:1.3;word-break:break-word}
+.gar-ok,.gar-hab{display:inline-block;max-width:100%}
+.gar-ok{background:#d1f5df;border:2px solid #111;border-radius:8px;padding:2px 6px;font-size:.66rem;font-weight:800;white-space:normal;line-height:1.3}
+.gar-hab{background:#eee;border:2px solid #111;border-radius:8px;padding:2px 6px;font-size:.66rem;font-weight:800;color:#888;white-space:normal;line-height:1.3}
+.b-blue{background:#d6ecff}.b-green{background:#d1f5df}.b-red{background:#ffd6d6}.b-amber{background:#fff3c4}.b-gray{background:#eee}.b-pink{background:#ffd9ec}.b-purple{background:#efe3ff}.b-teal{background:#d2f5ef}
+.loc{background:#fff;border:var(--brd);border-radius:10px;padding:10px 14px;box-shadow:3px 3px 0 #111;display:inline-flex;align-items:center;gap:8px;text-decoration:none;color:#111;font-weight:800}
+.socbtn{width:44px;height:44px;border:var(--brd);border-radius:12px;box-shadow:3px 3px 0 #111;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;transition:.1s}
+.socbtn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 #111}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.cal .dow{font-size:.68rem;text-transform:uppercase;font-weight:800;color:#a0446e;text-align:center;padding:4px 0}
+.cal .day{min-height:86px;background:#fff;border:2px solid #111;border-radius:10px;padding:5px;font-size:.68rem;overflow:hidden}
+.cal .day.out{background:#f7f7f7;border-color:#ddd}
+.cal .day b.d{font-size:.75rem}
+.cevent{border:2px solid #111;border-radius:6px;padding:2px 4px;margin-top:3px;font-weight:800;font-size:.62rem;line-height:1.25;cursor:pointer;overflow:hidden}
+.cev-ig{background:#ffd9ec}.cev-tt{background:#d2f5ef}.cev-both{background:#efe3ff}
+.cev-done{opacity:.55;text-decoration:line-through}
+.calhead{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.paytabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.paytab{border:2px solid #111;border-radius:10px;padding:9px 14px;font-weight:800;font-size:.8rem;cursor:pointer;background:#fff;box-shadow:3px 3px 0 #111}
+.paytab.on{background:var(--pink);color:#fff}
+.payinfo{background:var(--soft);border:var(--brd);border-radius:12px;padding:14px;font-size:.85rem;line-height:1.7}
+.payinfo b.nm{font-size:.95rem}
+.payrow{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:2px dashed #f3c1da;flex-wrap:wrap}
+.payrow b{user-select:all}
+.qrisbox{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.qrisreal{width:min(260px,70vw);height:auto;border:var(--brd);border-radius:12px;background:#fff;box-shadow:4px 4px 0 #111;display:block}
+.qrisimg{width:150px;height:150px;border:var(--brd);border-radius:12px;background:#fff url('/logo.jpg') center/60% no-repeat;box-shadow:4px 4px 0 #111;display:flex;align-items:flex-end;justify-content:center;padding-bottom:6px;font-size:.65rem;font-weight:800;color:#888}
+label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;font-weight:800;margin:10px 0 4px;color:#a0446e}
+input,select,textarea{width:100%;padding:11px 13px;border:var(--brd);border-radius:10px;font-size:.95rem;font-weight:600;background:var(--soft)}
+input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--pink)}
+.frm2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px}
+.frm3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 14px}
+.photos{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.phitem{position:relative;display:inline-block}
+.phitem img{width:72px;height:72px;object-fit:cover;border:var(--brd);border-radius:8px;cursor:zoom-in;display:block}
+.phitem small{position:absolute;top:2px;left:2px;background:#111;color:#fff;font-size:.52rem;font-weight:800;padding:1px 4px;border-radius:4px}
+.phitem.after small{background:var(--green)}
+.phdel{position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;border:2px solid #111;background:var(--red);color:#fff;font-size:.6rem;font-weight:800;cursor:pointer;line-height:1}
+.photos img{width:72px;height:72px;object-fit:cover;border:var(--brd);border-radius:8px;cursor:zoom-in}
+.tpl{background:var(--soft);border:var(--brd);border-radius:14px;padding:14px;margin-bottom:14px;box-shadow:4px 4px 0 #111}
+.tpl h4{font-size:.9rem;margin-bottom:8px}
+.tpl textarea{font-size:.82rem;background:#fff;resize:vertical}
+.rowbtns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.empty{padding:26px;text-align:center;color:#888;font-weight:700}
+#modal{position:fixed;inset:0;background:rgba(17,17,17,.6);display:none;align-items:center;justify-content:center;z-index:100;padding:16px}
+#modal.on{display:flex}
+#modal .box{background:#fff;border:var(--brd);border-radius:16px;max-width:660px;width:100%;max-height:88vh;overflow-y:auto;padding:22px;box-shadow:10px 10px 0 #111}
+.flex{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.sp{flex:1}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#111;color:var(--pink);padding:13px 24px;border-radius:12px;font-size:.9rem;font-weight:800;z-index:200;display:none;border:3px solid var(--pink)}
+.toast.on{display:block}
+.social{border-left:6px solid var(--blue)}
+.chart{display:flex;align-items:flex-end;gap:14px;height:180px;padding:10px 6px 0}
+.chart .grp{flex:1;display:flex;align-items:flex-end;gap:4px;height:100%}
+.bar{flex:1;border:2px solid #111;border-radius:6px 6px 0 0;position:relative;min-height:4px}
+.bar span{position:absolute;top:-20px;left:50%;transform:translateX(-50%);font-size:.62rem;font-weight:800;white-space:nowrap}
+.bar.in{background:var(--pink)}.bar.out{background:var(--blue)}
+.chart-x{display:flex;gap:14px;padding:6px 6px 0;text-align:center;font-size:.72rem;font-weight:800}
+.chart-x div{flex:1}
+.legend{display:flex;gap:16px;font-size:.75rem;font-weight:700;margin-top:8px}
+.legend i{display:inline-block;width:14px;height:14px;border:2px solid #111;border-radius:4px;vertical-align:-2px;margin-right:4px}
+.donut-wrap{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.donut{width:150px;height:150px;border-radius:50%;border:var(--brd);position:relative;flex-shrink:0}
+.donut::after{content:'';position:absolute;inset:32px;background:#fff;border:2px solid #111;border-radius:50%}
+.donut b{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:2;font-size:1.3rem}
+.dleg{font-size:.78rem;font-weight:700}.dleg div{margin:3px 0}.dleg i{display:inline-block;width:12px;height:12px;border:2px solid #111;border-radius:3px;margin-right:6px}
+@media(max-width:840px){
+  .layout{flex-direction:column;padding:10px;gap:12px}
+  nav{width:100%;position:static;display:flex;flex-wrap:nowrap;gap:6px;overflow-x:auto;padding:8px;-webkit-overflow-scrolling:touch}
+  nav button{width:auto;flex:0 0 auto;margin:0;padding:9px 12px;font-size:.8rem;white-space:nowrap}
+  nav .foot{display:none}
+  .frm2,.frm3{grid-template-columns:1fr}
+  .ptitle h2{transform:none;font-size:1rem}
+  header{padding:10px 12px}
+  .hrow{gap:8px}
+  .wa-admin{font-size:.72rem;padding:5px 10px;order:5;width:100%;text-align:center;margin-left:0}
+  .userchip{font-size:.72rem;order:4}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+  .card b{font-size:1.2rem}
+  .panel{padding:14px;border-radius:14px}
+  .box{padding:22px 16px}
+  .chart{height:150px;gap:8px}
+  .chart-x{gap:8px;font-size:.62rem}
+  .cal .day{min-height:64px;padding:3px;font-size:.6rem}
+  .cevent{font-size:.55rem}
+  .donut{width:120px;height:120px}
+  .donut::after{inset:26px}
+  .donut b{font-size:1rem}
+  #modal .box{padding:16px;max-height:92vh}
+  .qrisreal{width:min(220px,60vw)}
+  .tpl textarea,.payinfo{font-size:.82rem}
+  input,select,textarea{font-size:16px} /* cegah zoom iOS */
+}
+@media(max-width:480px){
+  .cards{grid-template-columns:1fr 1fr}
+  .flex{gap:8px}
+  .btn{padding:10px 14px;font-size:.82rem}
+  .btn.sm{padding:6px 9px;font-size:.7rem}
+  .socbtn{width:38px;height:38px}
+  .logo{font-size:.95rem}
+  .logo .dot{width:28px;height:28px}
+  .tbl-wrap{font-size:.72rem}
+  td,th{padding:6px 4px}
+}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="box">
+    <div class="logo"><img src="/logo.jpg" style="max-width:220px;height:auto;border:var(--brd);border-radius:12px;margin-bottom:10px"><br>⚡ <span>Admin Hub</span></div>
+    <p>Login cepat — cukup username, tanpa password 🔓</p>
+    <input id="li_user" placeholder="Username…" autocomplete="off">
+    <button onclick="doLogin()">MASUK ➜</button>
+    <div class="err" id="li_err"></div>
+    <div class="welcome">
+      <p class="w-title">Selamat Datang di Kudostack 💖</p>
+      <p class="w-sub">Tempat terpercayamu untuk menitipkan barang kesayangan.<br>
+      Kami perhatikan setiap detail, mengerjakan dengan hati,<br>
+      dan mengabarimu di setiap langkahnya. 🤝</p>
+    </div>
+  </div>
+</div>
+
+<div id="app">
+<header><div class="hrow">
+  <div class="logo"><img src="/logo.jpg" style="height:40px;width:auto;border:var(--brd);border-radius:10px;box-shadow:3px 3px 0 #111;background:#fff"> <span style="font-size:.72rem;background:#fff;color:#111;border:2px solid #111;border-radius:8px;padding:2px 8px">ADMIN HUB</span></div>
+  <div class="wa-admin">📞 Admin: <b>+62 851-6585-9837</b></div>
+  <a class="socbtn" style="width:34px;height:34px" href="https://www.instagram.com/kudo_stack" target="_blank" title="@kudo_stack di Instagram" onclick="event.stopPropagation()"><svg width="18" height="18" viewBox="0 0 24 24" fill="#fff"><path d="M12 2.2c3.2 0 3.6 0 4.8.07 3.25.15 4.77 1.7 4.92 4.92.06 1.27.07 1.65.07 4.81s-.01 3.54-.07 4.81c-.15 3.22-1.66 4.77-4.92 4.92-1.2.06-1.6.07-4.8.07s-3.6-.01-4.8-.07c-3.26-.15-4.77-1.7-4.92-4.92C2.2 15.54 2.2 15.16 2.2 12s0-3.54.08-4.81C2.42 3.97 3.94 2.42 7.2 2.27 8.4 2.21 8.8 2.2 12 2.2zm0 3.68a6.12 6.12 0 100 12.24 6.12 6.12 0 000-12.24zm0 2.2a3.92 3.92 0 110 7.84 3.92 3.92 0 010-7.84zm6.36-2.6a1.43 1.43 0 100 2.86 1.43 1.43 0 000-2.86z"/></svg></a>
+  <a class="socbtn" style="width:34px;height:34px;background:#111" href="https://www.tiktok.com/@kudo_stack" target="_blank" title="@kudo_stack di TikTok" onclick="event.stopPropagation()"><svg width="16" height="16" viewBox="0 0 24 24" fill="#fff"><path d="M19.6 6.7a5.6 5.6 0 01-3.4-3.5c-.1-.4-.2-.8-.2-1.2h-3.7v13.7a2.9 2.9 0 11-2.9-2.9c.3 0 .6 0 .9.1V9.2a6.6 6.6 0 00-.9-.06 6.66 6.66 0 106.66 6.66V9.4a9.2 9.2 0 004.5 1.16V6.8c-.3 0-.66-.03-.96-.1z"/></svg></a>
+  <div class="userchip">👤 <b id="uName">-</b> · <span id="uRole">-</span> · <b onclick="logout()" style="color:#ffd6d6">Keluar ✕</b></div>
+</div></header>
+
+<div class="layout">
+<nav>
+  <button data-p="home" class="on">🏠 <span class="lbl">Beranda</span></button>
+  <button data-p="proyek" id="navProj">📋 Proyek & Foto</button>
+  <button data-p="kas" id="navKas">💰 Kas Keuangan</button>
+  <button data-p="wa" id="navWA">💬 Pusat WhatsApp</button>
+  <button data-p="planner" id="navPlanner">📅 Content Planner</button>
+  <button data-p="sosmed" id="navSosmed">📱 Media Sosial</button>
+  <button data-p="pdf" id="navPdf">📄 Download PDF</button>
+  <button data-p="users" id="navUsers" style="display:none">👥 Kelola User</button>
+  <div class="foot">KUDOSTACK © 2026<br>All-in-One Admin Hub</div>
+</nav>
+
+<main>
+<div class="page on" id="p-home">
+  <div class="ptitle"><h2>📊 Dashboard Utama</h2><span class="sp"></span>
+    <button class="btn purple" id="btnMasterPdf" onclick="dl('/api/pdf/master')">⬇ Master Report PDF</button></div>
+  <div class="cards" id="statCards"></div>
+  <div id="custView" style="display:none">
+    <div class="ptitle"><h2>🚀 Progress Proyek Kamu</h2></div>
+    <div id="custProj"></div>
+  </div>
+  <div class="panel" id="bagiPanel">
+    <h3>🧾 Pembagian Omzet (dari proyek Lunas)</h3>
+    <div class="cards" id="bagiCards" style="margin-bottom:0"></div>
+  </div>
+  <div class="panel" id="chartPanel">
+    <h3>💰 Grafik Keuangan 6 Bulan Terakhir</h3>
+    <div class="chart" id="chartFin"></div>
+    <div class="chart-x" id="chartX"></div>
+    <div class="legend"><span><i style="background:var(--pink)"></i>Uang Masuk</span><span><i style="background:var(--blue)"></i>Uang Keluar</span></div>
+  </div>
+  <div class="frm2">
+    <div class="panel" id="donutPanel">
+      <h3>🍩 Status Proyek</h3>
+      <div class="donut-wrap"><div class="donut" id="donut"></div><div class="dleg" id="donutLeg"></div></div>
+    </div>
+    <div class="panel" id="layananPanel"><h3>📊 Ringkasan Layanan & Omzet</h3><div class="tbl-wrap"><table id="tLayanan"></table></div></div>
+  </div>
+  <div class="panel" id="berjalanPanel"><h3>🚀 Proyek Sedang Berjalan</h3><div class="tbl-wrap"><table id="tBerjalan"></table></div></div>
+</div>
+
+<div class="page" id="p-proyek">
+  <div class="ptitle"><h2>📋 Proyek & Foto</h2></div>
+  <div class="panel">
+    <h3 id="frmTitle">➕ Tambah Proyek Baru</h3>
+    <form id="frmProj">
+      <input type="hidden" id="f_id">
+      <div class="frm2">
+        <div><label>Nama Proyek / Perangkat *</label><input id="f_nama" required></div>
+        <div><label>Jenis Layanan *</label><select id="f_layanan" required><option value="">— Pilih —</option><option>Hardware</option><option>Software</option><option>DLL</option></select></div>
+        <div><label>Penanggung Jawab (PIC) *</label><input id="f_pic" required></div>
+        <div><label>Nama Klien</label><input id="f_klien"></div>
+        <div><label>No. WA Klien</label><input id="f_wa" placeholder="62xxx"></div>
+        <div><label>Biaya (Rp)</label><input id="f_biaya" type="number" min="0"></div>
+        <div><label>Status Bayar</label><select id="f_bayar"><option>Belum Bayar</option><option>DP</option><option>Lunas</option></select></div>
+        <div><label>Status Pengerjaan</label><select id="f_status"><option>Baru Masuk</option><option>Sedang Dikerjakan</option><option>Menunggu Pembayaran</option><option>Selesai / Closing</option><option>Komplain / Kendala</option></select></div>
+        <div><label>🛡️ Periode Garansi</label><div class="flex"><input id="f_garNum" type="number" min="0" style="width:80px"><select id="f_garUnit" style="width:auto"><option>bulan</option><option>minggu</option><option>hari</option><option>tahun</option></select></div></div>
+      </div>
+      <label>📥 INPUT — keluhan/permintaan/barang dari klien</label>
+      <textarea id="f_input" rows="2"></textarea>
+      <label>🔍 DIAGNOSIS AWAL (hasil pemeriksaan pertama teknisi)</label>
+      <textarea id="f_diag" rows="2" placeholder="cth: Kerusakan modul power, thermal paste kering, SSD health 78%"></textarea>
+      <label>📤 OUTPUT — hasil pengerjaan / link file</label>
+      <textarea id="f_output" rows="2"></textarea>
+      <label>🧾 LAPORAN HASIL TEKNISI (rincian pengerjaan & penggantian part)</label>
+      <textarea id="f_report" rows="3" placeholder="cth: Ganti thermal paste, bersihkan kipas, kalibrasi baterai…"></textarea>
+      <label>✍️ TANDA TANGAN DIGITAL (gambar pakai mouse/jari — ikut tercetak di PDF)</label>
+      <div style="border:var(--brd);border-radius:10px;background:#fff;display:inline-block;position:relative">
+        <canvas id="sigCanvas" width="420" height="140" style="touch-action:none;cursor:crosshair;display:block;border-radius:8px"></canvas>
+        <div class="rowbtns" style="padding:8px">
+          <button class="btn sm" type="button" onclick="sigClear()">🧽 Hapus</button>
+          <small id="sigState" style="color:#888;font-weight:700">belum ada tanda tangan</small>
+        </div>
+      </div>
+      <div class="flex" style="margin-top:14px">
+        <button class="btn blue" type="submit">💾 SIMPAN</button>
+        <button class="btn" type="button" onclick="resetFrm()">✕ Batal</button>
+      </div>
+    </form>
+  </div>
+  <div class="tbl-wrap"><table id="tProj"></table></div>
+</div>
+
+<div class="page" id="p-kas">
+  <div class="ptitle"><h2>💰 Kas Keuangan</h2></div>
+  <div class="cards" id="kasCards"></div>
+  <div class="panel">
+    <h3>➕ Catat Transaksi</h3>
+    <form id="frmTrx">
+      <div class="frm3">
+        <div><label>Tanggal</label><input type="date" id="t_tgl"></div>
+        <div><label>Jenis *</label><select id="t_jenis" required><option>Uang Masuk</option><option>Uang Keluar</option></select></div>
+        <div><label>Kategori</label><select id="t_kategori"><option>Hardware</option><option>Software</option><option>DLL</option><option>Operasional</option></select></div>
+        <div><label>Nominal (Rp) *</label><input id="t_nominal" type="number" min="0" required></div>
+        <div><label>PIC Keuangan</label><input id="t_pic"></div>
+        <div><label>Keterangan</label><input id="t_ket"></div>
+      </div>
+      <div class="flex" style="margin-top:14px"><button class="btn blue">💾 SIMPAN</button></div>
+    </form>
+  </div>
+  <div class="flex" style="margin-bottom:10px">
+    <select id="fltJenis" style="width:auto"><option value="">Semua Jenis</option><option>Uang Masuk</option><option>Uang Keluar</option></select>
+    <select id="fltKat" style="width:auto"><option value="">Semua Kategori</option><option>Hardware</option><option>Software</option><option>DLL</option><option>Operasional</option></select>
+    <input type="date" id="fltDari" style="width:auto" title="Dari tanggal">
+    <input type="date" id="fltSampai" style="width:auto" title="Sampai tanggal">
+    <button class="btn pink sm" onclick="renderTrx()">🔄 Filter</button>
+  </div>
+  <div class="tbl-wrap"><table id="tTrx"></table></div>
+</div>
+
+<div class="page" id="p-planner">
+  <div class="ptitle"><h2>📅 Content Planner</h2></div>
+  <div class="panel">
+    <h3>➕ Rencanakan Konten Baru</h3>
+    <form id="frmPlan">
+      <div class="frm3">
+        <div><label>Tanggal Tayang *</label><input type="date" id="cp_tgl" required></div>
+        <div><label>Judul Konten *</label><input id="cp_judul" required placeholder="cth: Before/After servis laptop"></div>
+        <div><label>Platform</label><select id="cp_plat"><option>Instagram</option><option>TikTok</option><option>Keduanya</option></select></div>
+      </div>
+      <label>📝 BRIEF — konsep & tujuan konten</label>
+      <textarea id="cp_brief" rows="2" placeholder="cth: Bangun kepercayaan, tunjukkan proses servis yang detail…"></textarea>
+      <label>🤖 PROMPT VIDEO — siap dieksekusi di Claude oleh tim medsos</label>
+      <textarea id="cp_prompt" rows="4" placeholder="cth: Buatkan script video TikTok 30 detik, format POV…"></textarea>
+      <label>💬 CAPTION — siap posting</label>
+      <textarea id="cp_caption" rows="3" placeholder="Caption + hashtag…"></textarea>
+      <div class="flex" style="margin-top:12px"><button class="btn blue">💾 SIMPAN KE KALENDER</button>
+      <button class="btn pink" type="button" onclick="genPrompt()">✨ Generate Prompt Otomatis</button></div>
+    </form>
+  </div>
+  <div class="panel">
+    <div class="calhead">
+      <button class="btn sm" onclick="calMove(-1)">◀</button>
+      <h3 id="calTitle" style="margin:0"></h3>
+      <button class="btn sm" onclick="calMove(1)">▶</button>
+      <span class="sp"></span>
+      <small style="color:#888"><span class="cevent cev-ig" style="display:inline-block">Instagram</span> <span class="cevent cev-tt" style="display:inline-block">TikTok</span> <span class="cevent cev-both" style="display:inline-block">Keduanya</span></small>
+    </div>
+    <div class="cal" id="calendar"></div>
+  </div>
+</div>
+
+<div class="page" id="p-wa">
+  <div class="ptitle"><h2>💬 Pusat WhatsApp</h2></div>
+  <div class="panel">
+    <label>Pilih Proyek — template terisi otomatis ✨</label>
+    <select id="waProj" style="max-width:420px" onchange="renderWATexts()"></select>
+  </div>
+  <div id="tplList"></div>
+</div>
+
+<div class="page" id="p-sosmed">
+  <div class="ptitle"><h2>📱 Media Sosial Kudostack</h2></div>
+  <div class="panel" id="socLinks">
+    <h3>🔗 Akun Resmi Kami</h3>
+    <div class="flex" style="gap:14px;margin-top:10px">
+      <a class="socbtn" href="https://www.instagram.com/kudo_stack" target="_blank" title="Instagram @kudo_stack" style="background:linear-gradient(45deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><path d="M12 2.2c3.2 0 3.6 0 4.8.07 3.25.15 4.77 1.7 4.92 4.92.06 1.27.07 1.65.07 4.81s-.01 3.54-.07 4.81c-.15 3.22-1.66 4.77-4.92 4.92-1.2.06-1.6.07-4.8.07s-3.6-.01-4.8-.07c-3.26-.15-4.77-1.7-4.92-4.92C2.2 15.54 2.2 15.16 2.2 12s0-3.54.08-4.81C2.42 3.97 3.94 2.42 7.2 2.27 8.4 2.21 8.8 2.2 12 2.2zm0 3.68a6.12 6.12 0 100 12.24 6.12 6.12 0 000-12.24zm0 2.2a3.92 3.92 0 110 7.84 3.92 3.92 0 010-7.84zm6.36-2.6a1.43 1.43 0 100 2.86 1.43 1.43 0 000-2.86z"/></svg>
+      </a>
+      <a class="socbtn" href="https://www.tiktok.com/@kudo_stack" target="_blank" title="TikTok @kudo_stack" style="background:#111">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="#fff"><path d="M19.6 6.7a5.6 5.6 0 01-3.4-3.5c-.1-.4-.2-.8-.2-1.2h-3.7v13.7a2.9 2.9 0 11-2.9-2.9c.3 0 .6 0 .9.1V9.2a6.6 6.6 0 00-.9-.06 6.66 6.66 0 106.66 6.66V9.4a9.2 9.2 0 004.5 1.16V6.8c-.3 0-.66-.03-.96-.1z"/></svg>
+      </a>
+      <div>
+        <b style="font-size:.95rem">@kudo_stack</b><br>
+        <small style="color:#888;font-weight:700">Instagram & TikTok resmi Kudostack — klik ikon untuk kunjungi</small>
+      </div>
+    </div>
+  </div>
+  <div class="panel" id="custInfo" style="display:none">
+    <h3>📞 Butuh Bantuan? Hubungi Kami!</h3>
+    <div class="flex" style="gap:12px;margin-top:10px;flex-wrap:wrap">
+      <a class="loc" href="https://wa.me/6285165859837?text=Halo%20Admin%20Kudostack!%20Saya%20butuh%20bantuan%20🙂" target="_blank">💬 WhatsApp Admin: <b>+62 851-6585-9837</b></a>
+    </div>
+    <h3 style="margin-top:18px">💳 Metode Pembayaran</h3>
+    <p style="font-size:.8rem;color:#666;margin-bottom:10px">Pembayaran bisa lewat QRIS, E-Wallet, Bank, atau Virtual Account. Kirim bukti transfer ke WhatsApp admin ya! 🙏</p>
+    <div class="paytabs">
+      <button class="paytab on" data-pay="qris">🔺 QRIS</button>
+      <button class="paytab" data-pay="ewallet">📱 E-Wallet</button>
+      <button class="paytab" data-pay="bank">🏦 Bank</button>
+      <button class="paytab" data-pay="va">🏧 Virtual Account</button>
+    </div>
+    <div id="payBody"></div>
+    <h3 style="margin-top:18px">📍 Lokasi Kudostack</h3>
+    <a class="loc" href="https://www.google.com/maps/search/Kudostack" target="_blank" style="background:var(--pinkSoft)">🗺️ Buka di Google Maps — klik untuk navigasi menuju lokasi</a>
+  </div>
+  <div class="panel" id="smPanel">
+    <h3>✍️ Generator Caption</h3>
+    <label>Pilih Proyek — caption terisi otomatis ✨</label>
+    <select id="smProj" style="max-width:420px" onchange="renderSM()"></select>
+    <div id="smList" style="margin-top:10px"></div>
+  </div>
+</div>
+
+<div class="page" id="p-pdf">
+  <div class="ptitle"><h2>📄 Download PDF</h2></div>
+  <div class="panel"><h3>1️⃣ Nota per Proyek (foto Before/After + diagnosis + laporan teknisi + garansi tercetak)</h3>
+    <div class="flex" style="margin-top:10px">
+      <select id="pdfProj" style="max-width:380px"></select>
+      <button class="btn purple" onclick="dlProjPdf()">⬇ Download Nota</button>
+    </div></div>
+  <div class="panel"><h3>2️⃣ Export Laporan Keuangan per Periode</h3>
+    <div class="flex" style="margin-top:10px;gap:8px">
+      <button class="btn purple" onclick="dl('/api/pdf/finance?periode=1w')">1 Minggu</button>
+      <button class="btn purple" onclick="dl('/api/pdf/finance?periode=1m')">1 Bulan</button>
+      <button class="btn purple" onclick="dl('/api/pdf/finance?periode=3m')">3 Bulan</button>
+      <button class="btn purple" onclick="dl('/api/pdf/finance?periode=6m')">6 Bulan</button>
+      <button class="btn purple" onclick="dl('/api/pdf/finance?periode=1y')">1 Tahun</button>
+      <button class="btn" onclick="dl('/api/pdf/finance?periode=all')">Semua</button>
+    </div></div>
+  <div class="cards">
+    <div class="card"><small>3️⃣ Rekap Semua Proyek</small><br><button class="btn purple" onclick="dl('/api/pdf/projects')">⬇ Download</button></div>
+    <div class="card"><small>4️⃣ Master Report</small><br><button class="btn purple" onclick="dl('/api/pdf/master')">⬇ Download</button></div>
+  </div>
+  <div class="panel"><h3>5️⃣ Export Data Mentah (SEMUA inputan — keuangan & proyek)</h3>
+    <p style="font-size:.78rem;color:#666;margin:6px 0 10px">CSV/JSON berisi seluruh field: keluhan klien, diagnosis, output, laporan teknisi, garansi, semua transaksi keuangan + keterangan. Cocok untuk backup / Excel.</p>
+    <div class="flex" style="gap:8px">
+      <button class="btn blue" onclick="dl('/api/export/projects.csv')">⬇ Proyek CSV</button>
+      <button class="btn blue" onclick="dl('/api/export/transactions.csv')">⬇ Keuangan CSV</button>
+      <button class="btn" onclick="dl('/api/export/projects.json')">⬇ Proyek JSON</button>
+      <button class="btn" onclick="dl('/api/export/transactions.json')">⬇ Keuangan JSON</button>
+    </div></div>
+</div>
+
+<div class="page" id="p-users">
+  <div class="ptitle"><h2>👥 Kelola User</h2></div>
+  <div class="panel">
+    <h3>➕ Tambah User Baru</h3>
+    <div class="frm2">
+      <div><label>Username Baru</label><input id="nu_name" placeholder="cth: teknisi1"></div>
+      <div><label>Role</label><select id="nu_role"><option>anggota</option><option>admin</option><option>medsos</option><option>customer</option><option>superadmin</option></select></div>
+    </div>
+    <div class="flex" style="margin-top:12px"><button class="btn blue" onclick="addUser()">💾 Tambah User</button></div>
+  </div>
+  <div class="tbl-wrap"><table id="tUsers"></table></div>
+</div>
+</main>
+</div>
+</div>
+
+<div id="modal" onclick="if(event.target===this)this.classList.remove('on')"><div class="box" id="modalBox"></div></div>
+<div id="confirmBox" style="position:fixed;inset:0;background:rgba(17,17,17,.6);display:none;align-items:center;justify-content:center;z-index:300;padding:16px">
+  <div style="background:#fff;border:var(--brd);border-radius:16px;max-width:380px;width:100%;padding:24px;box-shadow:10px 10px 0 #111;text-align:center">
+    <div style="font-size:2.4rem" id="cfIcon">⚠️</div>
+    <h3 id="cfMsg" style="margin:10px 0 18px;font-size:1rem">Yakin?</h3>
+    <div class="flex" style="justify-content:center;gap:10px">
+      <button class="btn red" id="cfYes" style="min-width:110px">Ya, lanjut</button>
+      <button class="btn" id="cfNo" style="min-width:90px">Batal</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const ADMIN_FOOTER='\n\nSalam hangat,\nAdmin Kudostack (WA: +62 851-6585-9837)';
+let PROJECTS=[],TRX=[],STATS=null,ME=null;
+const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
+const rupiah=n=>'Rp '+Number(n||0).toLocaleString('id-ID');
+const esc=s=>String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function askConfirm(msg,icon,cb){
+  const box=document.getElementById('confirmBox');
+  document.getElementById('cfIcon').textContent=icon||'⚠️';
+  document.getElementById('cfMsg').textContent=msg;
+  box.style.display='flex';
+  const yes=document.getElementById('cfYes'),no=document.getElementById('cfNo');
+  const close=()=>{box.style.display='none';yes.onclick=null;no.onclick=null;};
+  yes.onclick=()=>{close();cb(true);};
+  no.onclick=close;
+}
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');setTimeout(()=>t.classList.remove('on'),2600);}
+function dl(u){window.open(u,'_blank');}
+
+$('#li_user').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
+async function doLogin(){
+  const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('#li_user').value.trim()})});
+  const d=await r.json();
+  if(!d.ok){const e=$('#li_err');e.textContent=d.error;e.style.display='block';return;}
+  ME=d;sessionStorage.setItem('kds_user',JSON.stringify(d));startApp();
+}
+function logout(){sessionStorage.removeItem('kds_user');location.reload();}
+function startApp(){
+  $('#login').style.display='none';$('#app').style.display='block';
+  $('#uName').textContent=ME.username;
+  const roleLabel={superadmin:'⭐ SUPER ADMIN',admin:'🛠️ admin',anggota:'👨‍🔧 anggota',medsos:'📱 medsos',customer:'🛍️ customer'};
+  $('#uRole').textContent=roleLabel[ME.role]||ME.role;
+  // role-based menu
+  const r=ME.role;
+  const isCust=r==='customer';
+  $('#navUsers').style.display=r==='superadmin'?'flex':'none';
+  $('#navWA').style.display=['superadmin','admin','anggota'].includes(r)?'flex':'none';
+  $('#navPlanner').style.display=['superadmin','admin','medsos'].includes(r)?'flex':'none';
+  $('#navSosmed').style.display=isCust||['superadmin','admin','medsos'].includes(r)?'flex':'none';
+  $('#navPdf').style.display=['superadmin','admin'].includes(r)?'flex':'none';
+  $('#navKas').style.display=isCust?'none':'flex';
+  $('#navProj').style.display=isCust?'none':'flex';
+  $('#custInfo').style.display='block';
+  $('#smPanel').style.display=['superadmin','admin','medsos'].includes(r)?'block':'none';
+  $('#socLinks').style.display=isCust?'none':'block'; // customer tidak perlu generator caption panel? tetap tampil akun resmi
+  $('#socLinks').style.display='block';
+  document.querySelector('[data-p="home"] .lbl').textContent=isCust?'Proyek Saya':'Beranda';
+  if(r==='customer')renderPay('qris');
+  init();
+}
+
+$$('nav button').forEach(b=>b.onclick=()=>{
+  $$('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+  $$('.page').forEach(p=>p.classList.remove('on'));
+  $('#p-'+b.dataset.p).classList.add('on');
+  ({home:renderHome,proyek:renderProj,kas:()=>{renderTrx();renderKasCards();},wa:renderWA,planner:renderPlanner,sosmed:renderSM,pdf:renderPdfSel,users:renderUsers})[b.dataset.p]?.();
+});
+
+async function refresh(){
+  const[p,t,s]=await Promise.all([fetch('/api/projects').then(r=>r.json()),fetch('/api/transactions').then(r=>r.json()),fetch('/api/stats').then(r=>r.json())]);
+  PROJECTS=p;TRX=t;STATS=s;
+}
+const statusBadge=s=>{const m={'Baru Masuk':'b-blue','Sedang Dikerjakan':'b-amber','Menunggu Pembayaran':'b-purple','Selesai / Closing':'b-green','Komplain / Kendala':'b-red'};return `<span class="badge ${m[s]||'b-gray'}">${esc(s)}</span>`;};
+const bayarBadge=b=>{const m={'Lunas':'b-green','DP':'b-amber','Belum Bayar':'b-red'};return `<span class="badge ${m[b]||'b-gray'}">${esc(b)}</span>`;};
+function garansiCell(p){
+  if(!p.garansiNum)return'<span class="gar-hab">tanpa garansi</span>';
+  if(p.status!=='Selesai / Closing')return `<span class="badge b-pink">🛡️ ${p.garansiNum} ${p.garansiUnit} (saat closing)</span>`;
+  const habis=p.garansiAkhir&&p.garansiAkhir<new Date().toISOString().slice(0,10);
+  return habis?`<span class="gar-hab">habis ${p.garansiAkhir}</span>`:`<span class="gar-ok">🛡️ s.d. ${p.garansiAkhir}</span>`;
+}
+
+function progressPct(p){
+  const step={'Baru Masuk':15,'Sedang Dikerjakan':50,'Menunggu Pembayaran':80,'Selesai / Closing':100,'Komplain / Kendala':45};
+  return step[p.status]??10;
+}
+function custView(){
+  // customer: hanya proyek dgn nomor WA-nya yang terdaftar ATAU semua proyek aktif (sederhana: tampil semua proyek berjalan)
+  const mine=PROJECTS.filter(p=>p.status!=='Selesai / Closing');
+  $('#custProj').innerHTML=mine.length?mine.map(p=>{
+    const pct=progressPct(p);
+    const steps=['Baru Masuk','Sedang Dikerjakan','Menunggu Pembayaran','Selesai / Closing'];
+    const idx=steps.indexOf(p.status);
+    return `<div class="panel" style="box-shadow:4px 4px 0 #111">
+      <div class="flex"><h3 style="margin:0">${p.id} — ${esc(p.nama)}</h3><span class="sp"></span>${statusBadge(p.status)}</div>
+      <div style="margin:12px 0 6px;background:#fff;border:2px solid #111;border-radius:999px;height:22px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:linear-gradient(90deg,var(--pink),var(--blue));transition:width .6s"></div>
+      </div>
+      <div class="flex" style="font-size:.68rem;font-weight:800;gap:4px">
+        ${steps.map((s2,i)=>`<span style="color:${i<=idx?'var(--pink2)':'#bbb'}">${i<=idx?'●':'○'} ${s2}</span>${i<3?'<span style="color:#ddd">───</span>':''}`).join('')}
+      </div>
+      <div style="margin-top:10px;font-size:.8rem">
+        <small style="display:block;color:#666"><b>PIC:</b> ${esc(p.pic)}</small>
+        ${p.diagnosis?`<small style="display:block;color:#666"><b>Diagnosis:</b> ${esc(p.diagnosis)}</small>`:''}
+        ${p.output?`<small style="display:block;color:#666"><b>Hasil:</b> ${esc(p.output)}</small>`:''}
+        ${p.garansiNum?`<small style="display:block;color:#666"><b>Garansi:</b> 🛡️ ${p.garansiNum} ${p.garansiUnit}</small>`:''}
+      </div></div>`;
+  }).join(''):`<div class="panel empty">Belum ada proyek yang sedang dikerjakan 💤</div>`;
+}
+
+async function renderHome(){
+  await refresh();
+  if(ME.role==='customer'){
+    // customer: sembunyikan panel admin di beranda
+    ['statCards','bagiPanel','chartPanel','donutPanel','layananPanel','berjalanPanel'].forEach(id=>{const el=document.getElementById(id);if(el)el.style.display='none';});
+    document.getElementById('custView').style.display='block';
+    custView();
+    document.getElementById('btnMasterPdf').style.display='none';
+    return;
+  }
+  const s=STATS;
+  $('#statCards').innerHTML=`
+    <div class="card c-b"><small>Proyek Aktif</small><b>${s.aktif}</b></div>
+    <div class="card c-y"><small>Menunggu Bayar</small><b>${s.tungguBayar}</b></div>
+    <div class="card c-g"><small>Selesai</small><b>${s.selesai}</b></div>
+    <div class="card c-r"><small>Komplain</small><b>${s.komplain}</b></div>
+    <div class="card c-p"><small>Omzet (Lunas)</small><b>${rupiah(s.omzet)}</b></div>
+    <div class="card c-r"><small>Piutang</small><b>${rupiah(s.piutang)}</b></div>
+    <div class="card c-g"><small>Saldo Kas</small><b>${rupiah(s.saldo)}</b></div>`;
+  // pembagian omzet 50/30/20
+  const o=s.omzet;
+  $('#bagiCards').innerHTML=`
+    <div class="card c-g"><small>👨‍🔧 PIC / Teknisi — 50%</small><b>${rupiah(o*0.5)}</b></div>
+    <div class="card c-b"><small>🏢 Operasional — 30%</small><b>${rupiah(o*0.3)}</b></div>
+    <div class="card c-p"><small>⚡ Kas Kudostack — 20%</small><b>${rupiah(o*0.2)}</b></div>`;
+  const mx=Math.max(...s.months.map(m=>Math.max(m.masuk,m.keluar)),1);
+  $('#chartFin').innerHTML=s.months.map(m=>`<div class="grp">
+    <div class="bar in" style="height:${Math.max(m.masuk/mx*100,2)}%"><span>${m.masuk?(m.masuk/1000)+'k':''}</span></div>
+    <div class="bar out" style="height:${Math.max(m.keluar/mx*100,2)}%"><span>${m.keluar?(m.keluar/1000)+'k':''}</span></div></div>`).join('');
+  $('#chartX').innerHTML=s.months.map(m=>`<div>${m.label}</div>`).join('');
+  const sc=s.statusCount,tot=Object.values(sc).reduce((a,b)=>a+b,0)||1;
+  const cols={'Baru Masuk':'#4facfe','Sedang Dikerjakan':'#ffd60a','Menunggu Pembayaran':'#a55eea','Selesai / Closing':'#2ed573','Komplain / Kendala':'#ff4757'};
+  let acc=0;const stops=[];
+  for(const[k,v]of Object.entries(sc)){const from=acc/tot*360;acc+=v;const to=acc/tot*360;
+    if(v>0)stops.push(`${cols[k]} ${from}deg ${to}deg`);}
+  const d=$('#donut');
+  d.style.background=stops.length?`conic-gradient(${stops.join(',')})`:'#eee';
+  d.innerHTML=`<b>${PROJECTS.length}</b>`;
+  $('#donutLeg').innerHTML=Object.entries(sc).map(([k,v])=>`<div><i style="background:${cols[k]}"></i>${k}: <b>${v}</b></div>`).join('');
+  const L=s.layanan;
+  $('#tLayanan').innerHTML=`<tr><th>Layanan</th><th>Total</th><th>Aktif</th><th>Omzet Lunas</th></tr>`+
+    ['Hardware','Software','DLL'].map(k=>`<tr><td><b>${k}</b></td><td>${L[k].total}</td><td>${L[k].aktif}</td><td>${rupiah(L[k].omzet)}</td></tr>`).join('');
+  const run=PROJECTS.filter(p=>p.status!=='Selesai / Closing');
+  $('#tBerjalan').innerHTML=`<tr><th>ID</th><th>Proyek</th><th>Status</th><th>Bayar</th><th>PIC</th></tr>`+
+    (run.length?run.map(p=>`<tr><td><b>${p.id}</b></td><td>${esc(p.nama)}</td><td>${statusBadge(p.status)}</td><td>${bayarBadge(p.bayar)}</td><td>${esc(p.pic)}</td></tr>`).join(''):`<tr><td colspan="5" class="empty">Tidak ada proyek berjalan</td></tr>`);
+}
+
+function resetFrm(){$('#frmProj').reset();$('#f_id').value='';$('#frmTitle').textContent='➕ Tambah Proyek Baru';sigClear();}
+
+/* TANDA TANGAN DIGITAL */
+let sigData='',sigDrawing=false;
+function sigInit(){
+  const c=document.getElementById('sigCanvas');if(!c)return;
+  const ctx=c.getContext('2d');ctx.lineWidth=2.5;ctx.lineCap='round';ctx.strokeStyle='#111';
+  const xy=e=>{const r=c.getBoundingClientRect();const t=e.touches?e.touches[0]:e;return[(t.clientX-r.left)*c.width/r.width,(t.clientY-r.top)*c.height/r.height];};
+  const start=e=>{sigDrawing=true;const[a,b]=xy(e);ctx.beginPath();ctx.moveTo(a,b);e.preventDefault();};
+  const move=e=>{if(!sigDrawing)return;const[a,b]=xy(e);ctx.lineTo(a,b);ctx.stroke();e.preventDefault();};
+  const end=()=>{if(sigDrawing){sigDrawing=false;sigData=c.toDataURL('image/png');document.getElementById('sigState').textContent='✓ tanda tangan siap';}};
+  c.addEventListener('mousedown',start);c.addEventListener('mousemove',move);
+  c.addEventListener('mouseup',end);c.addEventListener('mouseleave',end);
+  c.addEventListener('touchstart',start,{passive:false});c.addEventListener('touchmove',move,{passive:false});c.addEventListener('touchend',end);
+}
+function sigClear(){const c=document.getElementById('sigCanvas');if(!c)return;c.getContext('2d').clearRect(0,0,c.width,c.height);sigData='';const s=document.getElementById('sigState');if(s)s.textContent='belum ada tanda tangan';}
+window.addEventListener('DOMContentLoaded',sigInit);
+$('#frmProj').onsubmit=async e=>{
+  e.preventDefault();
+  const body={nama:f_nama.value,layanan:f_layanan.value,pic:f_pic.value,klien:f_klien.value,wa:f_wa.value,biaya:f_biaya.value,bayar:f_bayar.value,status:f_status.value,input:f_input.value,diagnosis:f_diag.value,output:f_output.value,reportTeknisi:f_report.value,garansiNum:f_garNum.value,garansiUnit:f_garUnit.value,signature:sigData||null};
+  const id=f_id.value;
+  const r=await fetch(id?`/api/projects/${id}`:'/api/projects',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!r.ok){toast('Gagal menyimpan!');return;}
+  toast(id?'Proyek update ✓':'Proyek tersimpan ✓');resetFrm();await refresh();renderProj();
+};
+function editProj(id){const p=PROJECTS.find(x=>x.id===id);if(!p)return;
+  f_id.value=p.id;f_nama.value=p.nama;f_layanan.value=p.layanan;f_pic.value=p.pic;f_klien.value=p.klien;f_wa.value=p.wa;f_biaya.value=p.biaya;f_bayar.value=p.bayar;f_status.value=p.status;f_input.value=p.input;f_diag.value=p.diagnosis||'';f_output.value=p.output;f_report.value=p.reportTeknisi||'';f_garNum.value=p.garansiNum||0;f_garUnit.value=p.garansiUnit||'bulan';
+  sigClear();if(p.signature){const img=new Image();img.onload=()=>{const c=document.getElementById('sigCanvas');c.getContext('2d').drawImage(img,0,0,c.width,c.height);sigData=p.signature;document.getElementById('sigState').textContent='✓ tanda tangan tersimpan';};img.src=p.signature;}
+  $('#frmTitle').textContent='✏️ Edit '+p.id;window.scrollTo({top:0,behavior:'smooth'});}
+async function delProj(id){askConfirm('Yakin hapus proyek '+id+'? Data tidak bisa dikembalikan.','🗑️',async ok=>{if(!ok)return;await fetch('/api/projects/'+id,{method:'DELETE'});await refresh();renderProj();toast('Terhapus');});}
+function uploadPhoto(id,kind){const i=document.createElement('input');i.type='file';i.accept='image/*';
+  i.onchange=async()=>{const f=i.files[0];if(!f)return;
+    if(f.size>10*1024*1024){toast('Maksimal 10 MB');return;}
+    toast('Mengunggah '+f.name+'…');
+    const fd=new FormData();fd.append('photo',f);
+    const r=await fetch(`/api/projects/${id}/photo?kind=${kind}`,{method:'POST',body:fd});
+    if(r.ok){toast('Foto terunggah ✓');await refresh();renderProj();}else toast('Upload gagal');};i.click();}
+async function delPhoto(id,kind,url){askConfirm('Hapus foto ini?','📷',async ok=>{if(!ok)return;
+  const r=await fetch(`/api/projects/${id}/photo?kind=${kind}&url=${encodeURIComponent(url)}`,{method:'DELETE'});
+  if(r.ok){toast('Foto dihapus');await refresh();renderProj();}else toast('Gagal hapus');});}
+function zoom(u){$('#modalBox').innerHTML=`<img src="${u}" style="width:100%;border-radius:10px">`;$('#modal').classList.add('on');}
+function detail(id){const p=PROJECTS.find(x=>x.id===id);
+  $('#modalBox').innerHTML=`<h3 style="margin-bottom:12px">${p.id} — ${esc(p.nama)}</h3>
+  <p><b>📥 Input:</b><br>${esc(p.input)||'-'}</p><br>
+  <p><b>🔍 Diagnosis Awal:</b><br>${esc(p.diagnosis)||'-'}</p><br>
+  <p><b>🧾 Laporan Teknisi:</b><br>${esc(p.reportTeknisi)||'-'}</p><br>
+  <p><b>📤 Output:</b><br>${esc(p.output)||'-'}</p><br>
+  <p><b>🛡️ Garansi:</b> ${p.garansiNum?`${p.garansiNum} ${p.garansiUnit}${p.garansiAkhir?' — s.d. '+p.garansiAkhir:''}`:'tidak ada'}</p>`;
+  $('#modal').classList.add('on');}
+function renderProj(){
+  $('#tProj').innerHTML=`<colgroup><col style="width:8%"><col style="width:13%"><col style="width:7%"><col style="width:10%"><col style="width:8%"><col style="width:7%"><col style="width:12%"><col style="width:13%"><col style="width:7%"><col style="width:10%"><col style="width:5%"></colgroup><tr><th>ID</th><th>Proyek</th><th>Layanan</th><th>Klien</th><th>Biaya</th><th>Bayar</th><th>Status</th><th>Garansi</th><th>PIC</th><th>Foto</th><th>Aksi</th></tr>`+
+    PROJECTS.map(p=>`<tr><td><b>${p.id}</b><small>${p.tgl}</small></td>
+    <td><a href="#" onclick="detail('${p.id}');return false" style="color:var(--pink2)"><b>${esc(p.nama)}</b></a></td><td>${p.layanan}</td>
+    <td>${esc(p.klien)}<small>${esc(p.wa)}</small></td><td>${rupiah(p.biaya)}</td><td>${bayarBadge(p.bayar)}</td><td>${statusBadge(p.status)}</td><td>${garansiCell(p)}</td><td>${esc(p.pic)}</td>
+    <td><div class="photos">${p.fotoIn.map(u=>`<div class="phitem"><img src="${u}" onclick="zoom('${u}')"><small>BEFORE</small><button class="phdel" onclick="delPhoto('${p.id}','in','${u}')">✕</button></div>`).join('')}${p.fotoOut.map(u=>`<div class="phitem after"><img src="${u}" onclick="zoom('${u}')"><small>AFTER</small><button class="phdel" onclick="delPhoto('${p.id}','out','${u}')">✕</button></div>`).join('')}</div>
+    <div class="rowbtns"><button class="btn blue sm" onclick="uploadPhoto('${p.id}','in')">📷 Upload Masuk</button><button class="btn green sm" onclick="uploadPhoto('${p.id}','out')">📷 Upload Closing</button></div></td>
+    <td><div class="rowbtns" style="flex-direction:column"><button class="btn blue sm" onclick="editProj('${p.id}')">✏️</button><button class="btn green sm" onclick="goWA('${p.id}')">💬</button><button class="btn purple sm" onclick="dl('/api/pdf/project/${p.id}')">📄</button><button class="btn red sm" onclick="delProj('${p.id}')">🗑️</button></div></td></tr>`).join('')||`<tr><td colspan="11" class="empty">Belum ada proyek</td></tr>`;
+}
+function goWA(id){document.querySelector('[data-p="wa"]').click();waProj.value=id;renderWATexts();}
+
+$('#frmTrx').onsubmit=async e=>{e.preventDefault();
+  const r=await fetch('/api/transactions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tgl:t_tgl.value,jenis:t_jenis.value,kategori:t_kategori.value,nominal:t_nominal.value,pic:t_pic.value,ket:t_ket.value})});
+  if(!r.ok){toast('Gagal');return;}toast('Tersimpan ✓');e.target.reset();t_tgl.value=new Date().toISOString().slice(0,10);
+  await refresh();renderTrx();renderKasCards();};
+async function delTrx(id){askConfirm('Hapus transaksi ini?','💰',async ok=>{if(!ok)return;await fetch('/api/transactions/'+id,{method:'DELETE'});await refresh();renderTrx();renderKasCards();});}
+function renderKasCards(){
+  const m=TRX.filter(t=>t.jenis==='Uang Masuk').reduce((s,t)=>s+t.nominal,0);
+  const k=TRX.filter(t=>t.jenis==='Uang Keluar').reduce((s,t)=>s+t.nominal,0);
+  $('#kasCards').innerHTML=`<div class="card c-g"><small>Uang Masuk</small><b>${rupiah(m)}</b></div>
+  <div class="card c-r"><small>Uang Keluar</small><b>${rupiah(k)}</b></div>
+  <div class="card c-p"><small>Saldo Bersih</small><b>${rupiah(m-k)}</b></div>
+  <div class="card c-g"><small>Bagian PIC (50% omzet lunas)</small><b>${rupiah((STATS?.omzet||0)*0.5)}</b></div>
+  <div class="card c-b"><small>Operasional (30%)</small><b>${rupiah((STATS?.omzet||0)*0.3)}</b></div>
+  <div class="card c-p"><small>Kas Kudostack (20%)</small><b>${rupiah((STATS?.omzet||0)*0.2)}</b></div>`;}
+async function renderTrx(){
+  await refresh();
+  const j=fltJenis.value,k=fltKat.value,d=fltDari.value,s=fltSampai.value;
+  let rows=TRX.filter(x=>(!j||x.jenis===j)&&(!d||x.tgl>=d)&&(!s||x.tgl<=s));
+  if(k)rows=rows.filter(x=>x.kategori===k);
+  $('#tTrx').innerHTML=`<tr><th>ID</th><th>Tanggal</th><th>Jenis</th><th>Kategori</th><th>Nominal</th><th>PIC</th><th>Ket</th><th></th></tr>`+
+    (rows.length?rows.map(x=>`<tr><td><b>${x.id}</b></td><td>${x.tgl}</td><td><span class="badge ${x.jenis==='Uang Masuk'?'b-green':'b-red'}">${x.jenis}</span></td><td>${x.kategori}</td><td>${rupiah(x.nominal)}</td><td>${esc(x.pic)}</td><td>${esc(x.ket)}</td><td><button class="btn red sm" onclick="delTrx('${x.id}')">🗑️</button></td></tr>`).join(''):`<tr><td colspan="8" class="empty">Tidak ada transaksi</td></tr>`);
+}
+
+const TEMPLATES=[
+  {t:'1. Konfirmasi Diterima ✅',f:p=>`Halo kak ${p.klien}! 👋\n\nProyek *${p.nama}* (ID: ${p.id} | ${p.layanan}) udah kami terima ya kak ✅\n\nCatatan masukannya:\n${p.input||'-'}\n\nNanti dikerjain sama *${p.pic}* ya kak, tenang aja amanah 😄`},
+  {t:'2. Diagnosis Awal 🔍',f:p=>`Halo kak ${p.klien}! 🔍\n\nHasil cek awal buat *${p.nama}* (${p.id}):\n\n${p.diagnosis||'-'}\n\nTenang, udah ditangani *${p.pic}*. Nanti kami kabarin progresnya ya kak! 💪`},
+  {t:'3. Update Progres 🛠️',f:p=>`Halo kak ${p.klien}! 👋\n\nUpdate nih buat *${p.nama}* (${p.id}):\n\nMasih dikerjain sama *${p.pic}*, aman lancar jaya 🛠️ Nanti kami kabarin lagi pas udah kelar ya kak!`},
+  {t:'4. Hasil Udah Jadi 🎉',f:p=>`Halo kak ${p.klien}! 🎉\n\nGood news! *${p.nama}* (${p.id}) udah *SELESAI* 🎊\n\nHasilnya:\n${p.output||'-'}\n\nSilakan dicek ya kak, kalau ada yang kurang pas bilang aja 😉`},
+  {t:'5. Tagihan / Invoice 💰',f:p=>`Halo kak ${p.klien}! 👋\n\nIni tagihan buat *${p.nama}* (${p.id}) ya kak:\n\n💰 Total: *${rupiah(p.biaya)}*\n\nBisa transfer ke rekening yang kami info via chat ini. Kalau udah transfer, kirim buktinya ya kak 🙏 Makasih!`},
+  {t:'6. Serah Terima + Garansi 🎁',f:p=>`Halo kak ${p.klien}! 🎉\n\nPembayaran *${p.nama}* (${p.id}) udah kami terima *LUNAS* ✅💰\n\nBarang/hasilnya siap diambil/dikirim + foto bukti closing terlampir 📸\n\n🛡️ *Garansi:* ${p.garansiNum?p.garansiNum+' '+p.garansiUnit+(p.garansiAkhir?' (s.d. '+p.garansiAkhir+')':''):'belum disetel'}\n\nKalau puas, boleh banget kasih testimoni ya kak 🙏 Itu bikin tim kami makin semangat!`},
+  {t:'7a. Komplain — Cek Dulu 🙏',f:p=>`Halo kak ${p.klien},\n\nWaduh, maaf banget ada kendala di *${p.nama}* (${p.id}) 😔\n\nSekarang *${p.pic}* lagi cek dan periksa penyebabnya. Nanti kami kabarin hasil pengecekannya secepatnya ya kak!`},
+  {t:'7b. Komplain — Lagi Diperbaiki 🔧',f:p=>`Halo kak ${p.klien}!\n\nUpdate perbaikan *${p.nama}* (${p.id}):\n\nTim kami (${p.pic}) udah tanggapin dan lagi kerjain perbaikannya 🔧 Pasti kami beresin! 💪`},
+  {t:'7c. Komplain — Udah Beres ✅',f:p=>`Halo kak ${p.klien}! 🎉\n\nKendala di *${p.nama}* (${p.id}) udah *TUNTAS 100%* ✅\n\nSilakan dicek lagi ya kak, dan tolong konfirmasinya 🙏 Kalau masih ada masalah, langsung chat kami aja lagi!`},
+];
+function renderWA(){
+  $('#waProj').innerHTML=PROJECTS.map(p=>`<option value="${p.id}">${p.id} — ${esc(p.nama)} (${esc(p.klien)})</option>`).join('');
+  $('#tplList').innerHTML=TEMPLATES.map((t,i)=>`
+    <div class="tpl"><h4>${t.t}</h4><textarea id="tpl${i}" rows="7"></textarea>
+    <div class="rowbtns">
+      <button class="btn green" onclick="sendWA(${i})">📲 Kirim Langsung via WA</button>
+      <a class="btn blue" style="text-decoration:none" id="waMe${i}" target="_blank" onclick="prepMe(${i})">🔗 Fallback wa.me</a>
+      <button class="btn" onclick="copyTpl(${i})">📋 Salin</button>
+    </div></div>`).join('');
+  renderWATexts();
+}
+function renderWATexts(){TEMPLATES.forEach((t,i)=>{const el=$('#tpl'+i);if(el)el.value=fillVars(t);});}
+function fillVars(t){const p=PROJECTS.find(x=>x.id===waProj.value);if(!p)return'— Pilih proyek dulu ya di atas —';return t.f(p)+ADMIN_FOOTER;}
+function prepMe(i){const p=PROJECTS.find(x=>x.id===waProj.value);
+  $('#waMe'+i).href=p&&p.wa?`https://wa.me/${p.wa}?text=${encodeURIComponent($('#tpl'+i).value)}`:`https://wa.me/?text=${encodeURIComponent($('#tpl'+i).value)}`;}
+function copyTpl(i){navigator.clipboard.writeText($('#tpl'+i).value).then(()=>toast('Tersalin ✓'));}
+async function sendWA(i){const p=PROJECTS.find(x=>x.id===waProj.value);
+  if(!p){toast('Pilih proyek dulu');return;}
+  const r=await fetch('/api/send-wa',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:p.wa,message:$('#tpl'+i).value})});
+  if(r.ok)toast('✅ Masuk antrean kirim server!');else toast('⚠️ Gagal — pakai fallback wa.me');}
+
+/* PEMBAYARAN CUSTOMER */
+const PAY={
+  qris:`<div class="qrisbox">
+    <img src="/qris.jpg" alt="QRIS KUDOSTACK" class="qrisreal" onclick="zoom('/qris.jpg')" style="cursor:zoom-in">
+    <div class="payinfo" style="flex:1;min-width:200px">
+      <b class="nm">Scan QRIS — semua e-wallet & m-banking</b><br>
+      <small style="color:#666">GoPay · OVO · DANA · ShopeePay · LinkAja · Semua bank</small>
+      <div class="payrow"><span>Nama</span><b>KUDOSTACK, Service</b></div>
+      <div class="payrow"><span>NMID</span><b>ID1026635766458</b></div>
+      <div class="payrow"><span>QR berlaku</span><b>Statis (selamanya)</b></div>
+      <small style="color:#888">Klik gambar QR untuk perbesar · kirim bukti transfer ke WA admin 🙏</small>
+    </div></div>`,
+  ewallet:`<div class="payinfo">
+      <b class="nm">📱 E-Wallet</b>
+      <div class="payrow"><span>GoPay</span><b>0851-6585-9837</b></div>
+      <div class="payrow"><span>OVO</span><b>0851-6585-9837</b></div>
+      <div class="payrow"><span>DANA</span><b>0851-6585-9837</b></div>
+      <div class="payrow"><span>ShopeePay</span><b>0851-6585-9837</b></div>
+      <small style="color:#888">a.n. Kudostack Official — konfirmasi ke WA admin setelah transfer ya! 💬</small>
+    </div>`,
+  bank:`<div class="payinfo">
+      <b class="nm">🏦 Transfer Bank</b>
+      <div class="payrow"><span>BCA</span><b>1234567890</b></div>
+      <div class="payrow"><span>BRI</span><b>098765432112345</b></div>
+      <div class="payrow"><span>Mandiri</span><b>1122334455</b></div>
+      <div class="payrow"><span>BNI</span><b>0551234567</b></div>
+      <small style="color:#888">a.n. Kudostack Official — sesuaikan nomor rekening asli di index.html</small>
+    </div>`,
+  va:`<div class="payinfo">
+      <b class="nm">🏧 Virtual Account</b>
+      <div class="payrow"><span>VA BCA</span><b>8808 5165 8598 37</b></div>
+      <div class="payrow"><span>VA BRI</span><b>8810 8516 5859 837</b></div>
+      <div class="payrow"><span>VA Mandiri</span><b>8950 8516 5859 837</b></div>
+      <div class="payrow"><span>VA BNI</span><b>9881 8516 5859 837</b></div>
+      <small style="color:#888">Nomor VA terverifikasi bank — slip otomatis masuk ke rekening a.n. Kudostack</small>
+    </div>`
+};
+function renderPay(tab){
+  document.querySelectorAll('.paytab').forEach(b=>b.classList.toggle('on',b.dataset.pay===tab));
+  const el=document.getElementById('payBody');if(el)el.innerHTML=PAY[tab]||'';
+}
+document.addEventListener('click',e=>{const t=e.target.closest('.paytab');if(t)renderPay(t.dataset.pay);});
+
+const HASHTAG='#Kudostack #ServisTerpercaya #JasaServis #TeknisiHandal';
+const SM=[
+  {t:'🎵 TikTok — Before/After (hook singkat)',f:p=>`POV: barang kamu "mati suri" ternyata cuma... 🤯\n\n📥 Masuk: ${p.input||'error di mana-mana'}\n🔍 Diagnosis: ${p.diagnosis||'cek titik demi titik'}\n🧾 Yang dikerjain: ${p.reportTeknisi||'bedah total + upgrade'}\n📤 Hasil: ${p.output||'lancar jaya kembali!'}\n\nPunya masalah serupa? DM aja! 😉\n\n${HASHTAG} #fyp #servis #perbaikan`},
+  {t:'📸 Instagram — Caption Estetik',f:p=>`✨ Studi kasus minggu ini ✨\n\n🔧 ${p.nama} (${p.layanan})\n📥 Keluhan: ${p.input||'-'}\n🔍 Diagnosis awal: ${p.diagnosis||'-'}\n🧾 Pengerjaan: ${p.reportTeknisi||'-'}\n📤 Hasil akhir: ${p.output||'-'}\n\n🛡️ ${p.garansiNum?`Garansi resmi ${p.garansiNum} ${p.garansiUnit}!`:'Garansi sesuai ketentuan layanan'}\n\nPercayakan barang kesayanganmu ke yang ahli. Link di bio! 💖\n\n${HASHTAG}`},
+  {t:'🧵 Threads — Santai & Interaktif',f:p=>`Cerita singkat: ${p.nama} masuk dengan kondisi "${p.input||'sudah kelihatan parah'}" 😅\n\nSetelah dicek: ${p.diagnosis||'masalahnya kelihatan'}\nDikerjakan: ${p.reportTeknisi||'perbaikan menyeluruh'}\nHasilnya: ${p.output||'normal lagi 100%'} ✅\n\nPernah ngalamin hal serupa? Drop di komen, siapa tahu bisa kami bantu 👇\n\n${HASHTAG}`},
+  {t:'🎉 Post Closing / Testimoni (semua platform)',f:p=>`Proyek ${p.nama} untuk ${p.klien} resmi SELESAI & SERAH TERIMA 🎉\n\n👥 PIC: ${p.pic}\n🛡️ Garansi: ${p.garansiNum?p.garansiNum+' '+p.garansiUnit:'sesuai ketentuan'}\n\nTerima kasih sudah percaya sama Kudostack 💖\nButuh bantuan serupa? Chat kami: wa.me/6285165859837\n\n${HASHTAG}`},
+];
+function renderSM(){
+  $('#smProj').innerHTML=PROJECTS.map(p=>`<option value="${p.id}">${p.id} — ${esc(p.nama)} (${esc(p.klien)})</option>`).join('');
+  $('#smList').innerHTML=SM.map((t,i)=>`
+    <div class="tpl social"><h4>${t.t}</h4><textarea id="sm${i}" rows="8"></textarea>
+    <div class="rowbtns"><button class="btn" onclick="copySM(${i})">📋 Salin Caption</button></div></div>`).join('');
+  SM.forEach((t,i)=>{const el=$('#sm'+i);if(el)el.value=fillSM(t);});
+}
+function fillSM(t){const p=PROJECTS.find(x=>x.id===smProj.value);if(!p)return'— Pilih proyek dulu ya di atas —';return t.f(p);}
+function copySM(i){navigator.clipboard.writeText($('#sm'+i).value).then(()=>toast('Caption tersalin ✓'));}
+
+function renderPdfSel(){const o=PROJECTS.map(p=>`<option value="${p.id}">${p.id} — ${esc(p.nama)}</option>`).join('');$('#pdfProj').innerHTML=o||'<option value="">— Belum ada proyek —</option>';}
+function dlProjPdf(){const id=pdfProj.value;if(id)dl('/api/pdf/project/'+id);}
+
+/* ============ CONTENT PLANNER ============ */
+let PLANS=[],calY=new Date().getFullYear(),calM=new Date().getMonth();
+const BULAN=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+async function loadPlans(){PLANS=await fetch('/api/plans').then(r=>r.json()).catch(()=>[]);}
+function renderPlanner(){loadPlans().then(drawCal);}
+function calMove(d){calM+=d;if(calM<0){calM=11;calY--;}if(calM>11){calM=0;calY++;}drawCal();}
+function drawCal(){
+  $('#calTitle').textContent=BULAN[calM]+' '+calY;
+  const first=new Date(calY,calM,1);
+  let startDow=(first.getDay()+6)%7; // Senin=0
+  const dim=new Date(calY,calM+1,0).getDate();
+  let html=['Sen','Sel','Rab','Kam','Jum','Sab','Min'].map(d=>`<div class="dow">${d}</div>`).join('');
+  for(let i=0;i<startDow;i++)html+='<div class="day out"></div>';
+  for(let d=1;d<=dim;d++){
+    const ds=`${calY}-${String(calM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const evs=PLANS.filter(p=>p.tanggal===ds);
+    html+=`<div class="day"><b class="d">${d}</b>`+evs.map(e=>{
+      const cls=e.platform==='Instagram'?'cev-ig':e.platform==='TikTok'?'cev-tt':'cev-both';
+      const done=e.status==='Tayang'?' cev-done':'';
+      return `<div class="cevent ${cls}${done}" onclick="showPlan('${e.id}')">${e.platform==='Keduanya'?'⚡':'📌'} ${esc(e.judul)}</div>`;
+    }).join('')+'</div>';
+  }
+  $('#calendar').innerHTML=html;
+}
+function showPlan(id){
+  const p=PLANS.find(x=>x.id===id);if(!p)return;
+  $('#modalBox').innerHTML=`<h3 style="margin-bottom:6px">${esc(p.judul)}</h3>
+  <div class="flex" style="margin-bottom:12px">
+    <span class="badge b-blue">📅 ${p.tanggal}</span>
+    <span class="badge b-pink">${esc(p.platform)}</span>
+    <span class="badge ${p.status==='Tayang'?'b-green':'b-amber'}">${p.status}</span>
+    <span class="sp"></span>
+    ${p.status!=='Tayang'?`<button class="btn green sm" onclick="setPlanStatus('${p.id}','Tayang')">✅ Tandai Tayang</button>`:`<button class="btn sm" onclick="setPlanStatus('${p.id}','Draft')">↩ Draft lagi</button>`}
+    <button class="btn red sm" onclick="delPlan('${p.id}')">🗑️</button>
+  </div>
+  <label>📝 Brief</label><div class="tpl" style="margin:4px 0 12px">${esc(p.brief)||'-'}</div>
+  <label>🤖 Prompt Video (copy ke Claude)</label>
+  <textarea rows="5" style="margin:4px 0" id="mPrompt">${esc(p.prompt)}</textarea>
+  <div class="rowbtns"><button class="btn pink sm" onclick="navigator.clipboard.writeText(document.getElementById('mPrompt').value).then(()=>toast('Prompt tersalin ✓'))">📋 Salin Prompt</button></div>
+  <label style="margin-top:12px">💬 Caption</label>
+  <textarea rows="5" style="margin:4px 0" id="mCaption">${esc(p.caption)}</textarea>
+  <div class="rowbtns"><button class="btn sm" onclick="navigator.clipboard.writeText(document.getElementById('mCaption').value).then(()=>toast('Caption tersalin ✓'))">📋 Salin Caption</button>
+  <button class="btn blue sm" onclick="savePlanInline('${p.id}')">💾 Simpan Edit</button></div>`;
+  $('#modal').classList.add('on');
+}
+async function savePlanInline(id){
+  const r=await fetch(`/api/plans/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:ME.username,prompt:document.getElementById('mPrompt').value,caption:document.getElementById('mCaption').value})});
+  if(r.ok){toast('Tersimpan ✓');$('#modal').classList.remove('on');renderPlanner();}else toast('Gagal');
+}
+async function setPlanStatus(id,s){
+  const r=await fetch(`/api/plans/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:ME.username,status:s})});
+  if(r.ok){$('#modal').classList.remove('on');renderPlanner();}else toast('Gagal');
+}
+async function delPlan(id){askConfirm('Hapus konten ini dari kalender?','📅',async ok=>{if(!ok)return;
+  const r=await fetch(`/api/plans/${id}?actor=${ME.username}`,{method:'DELETE'});
+  if(r.ok){$('#modal').classList.remove('on');renderPlanner();}else toast('Gagal');});}
+function genPrompt(){
+  const judul=cp_judul.value||'konten servis';
+  const plat=cp_plat.value;
+  cp_prompt.value=`Buatkan script video ${plat==='Keduanya'?'Instagram Reels & TikTok':plat} untuk akun servis teknologi "Kudostack" dengan judul konten: "${judul}".
+
+Ketentuan video:
+- Durasi: 25-35 detik, format vertikal 9:16
+- Hook 2 detik pertama harus bikin penasarat (jangan pakai salam)
+- Alur: masalah -> proses perbaikan (fast cut + close-up) -> hasil sebelum/sesudah -> CTA "DM / chat WA admin"
+- Tone: santai, gaul, meyakinkan, khas creator teknologi Indonesia
+- Tambahkan: ide teks overlay per scene, rekomendasi musik trending, dan angle kamera per shot
+- Brief konteks: ${cp_brief.value||'tunjukkan keahlian & kepercayaan pada jasa servis Kudostack'}
+
+Output yang diharapkan: tabel storyboard (scene, durasi, visual, teks overlay, audio) + 3 alternatif hook.`;
+  if(!cp_caption.value)cp_caption.value=`${judul} ✨\n\nProses pengerjaannya kita tunjukin semua, biar kamu tenang titip barang di Kudostack 💖\n\nButuh bantuan serupa? Chat kami ya!\n\n#Kudostack #ServisTerpercaya #JasaServis #TeknisiHandal #fyp`;
+}
+$('#frmPlan').onsubmit=async e=>{
+  e.preventDefault();
+  const r=await fetch('/api/plans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:ME.username,tanggal:cp_tgl.value,judul:cp_judul.value,platform:cp_plat.value,brief:cp_brief.value,prompt:cp_prompt.value,caption:cp_caption.value})});
+  if(r.ok){toast('Konten masuk kalender ✓');e.target.reset();renderPlanner();}else{const d=await r.json().catch(()=>({}));toast(d.error||'Gagal');}
+};
+
+async function renderUsers(){
+  const us=await fetch('/api/users').then(r=>r.json());
+  const roleCls={superadmin:'b-purple',admin:'b-blue',anggota:'b-green',medsos:'b-teal',customer:'b-pink'};
+  const roleLbl={superadmin:'⭐ superadmin',admin:'🛠️ admin',anggota:'👨‍🔧 anggota',medsos:'📱 medsos',customer:'🛍️ customer'};
+  $('#tUsers').innerHTML=`<tr><th>Username</th><th>Role</th><th>Dibuat</th><th></th></tr>`+
+    us.map(u=>`<tr><td><b>${esc(u.username)}</b>${u.username===ME.username?' <span class="badge b-pink">kamu</span>':''}</td>
+    <td><span class="badge ${roleCls[u.role]||'b-gray'}">${roleLbl[u.role]||u.role}</span></td><td>${u.created}</td>
+    <td>${u.username!=='superadmin'?`<button class="btn red sm" onclick="delUser('${u.username}')">🗑️</button>`:'<small style="color:#888">akun utama</small>'}</td></tr>`).join('');
+}
+async function addUser(){
+  const r=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:ME.username,username:nu_name.value,role:nu_role.value})});
+  const d=await r.json();
+  if(r.ok){toast('User ditambahkan ✓');nu_name.value='';renderUsers();}else toast(d.error||'Gagal');
+}
+async function delUser(u){askConfirm('Hapus user '+u+'?','👤',async ok=>{if(!ok)return;
+  const r=await fetch(`/api/users/${u}?actor=${ME.username}`,{method:'DELETE'});
+  const d=await r.json().catch(()=>({}));
+  if(r.ok){toast('User dihapus');renderUsers();}else toast(d.error||'Gagal');});}
+
+async function init(){t_tgl.value=new Date().toISOString().slice(0,10);await refresh();renderHome();}
+setInterval(()=>{if(ME)refresh();},15000);
+(function(){try{const s=sessionStorage.getItem('kds_user');if(s){ME=JSON.parse(s);startApp();}}catch(e){}})();
+</script>
+</body>
+</html>

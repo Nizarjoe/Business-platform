@@ -3,25 +3,69 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const PDFDocument = require('pdfkit');
-const { load, save, ADMIN_WA } = require('./db');
+const {
+  load, update, loadDoc, updateDoc, readOrSeed,
+  uploadObject, removeStored, usingRemote, initPersistence,
+  UPLOADS_DIR, ADMIN_WA
+} = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const UPLOADS = path.join(__dirname, 'uploads');
-fs.mkdirSync(UPLOADS, { recursive: true });
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const QRIS_IMG = process.env.QRIS_FILE
+  ? path.resolve(process.env.QRIS_FILE)
+  : path.join(__dirname, 'public', 'qris.jpg');
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS),
-  filename: (req, file, cb) => {
-    const uniq = Date.now() + '-' + Math.round(Math.random() * 1e6);
-    cb(null, `${req.params.id || 'x'}-${uniq}${path.extname(file.originalname)}`);
-  }
-});
+const storage = usingRemote()
+  ? multer.memoryStorage()
+  : multer.diskStorage({
+      destination: (req, file, cb) => cb(null, UPLOADS_DIR),
+      filename: (req, file, cb) => {
+        const uniq = Date.now() + '-' + Math.round(Math.random() * 1e6);
+        cb(null, `${req.params.id || 'x'}-${uniq}${path.extname(file.originalname)}`);
+      }
+    });
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
 app.use(express.json({ limit: '5mb' }));
+
+// Replaced QRIS images live in Storage when Supabase is configured. The page
+// still requests /qris.jpg, so serve that URL from the stored public object.
+app.get('/qris.jpg', async (req, res, next) => {
+  try {
+    if (usingRemote()) {
+      const meta = await loadDoc('qris-meta');
+      if (meta && meta.imageUrl) {
+        const r = await fetch(meta.imageUrl);
+        if (r.ok) {
+          res.set('Content-Type', r.headers.get('content-type') || 'image/jpeg');
+          res.set('Cache-Control', 'no-store');
+          res.send(Buffer.from(await r.arrayBuffer()));
+          return;
+        }
+      }
+    } else if (process.env.QRIS_FILE && fs.existsSync(QRIS_IMG)) {
+      res.set('Cache-Control', 'no-store');
+      res.type(path.extname(QRIS_IMG) === '.png' ? 'png' : 'jpeg');
+      res.send(fs.readFileSync(QRIS_IMG));
+      return;
+    }
+    next();
+  } catch (e) {
+    next();
+  }
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(UPLOADS));
+app.use('/uploads', express.static(UPLOADS_DIR));
+
+function safeExt(name) {
+  const ext = path.extname(name || '').toLowerCase();
+  return ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.bmp'].includes(ext) ? ext : '.jpg';
+}
+function safeId(id) {
+  return String(id || 'x').replace(/[^A-Za-z0-9_-]/g, '') || 'x';
+}
 
 const rupiah = n => 'Rp ' + Number(n || 0).toLocaleString('id-ID');
 const DAY = 86400000;
@@ -35,161 +79,200 @@ const addPeriode = (dstr, num, unit) => {
 };
 
 /* ================= AUTH ================= */
-const USERS_FILE = path.join(__dirname, 'data', 'users.json');
-function getUsers() {
-  if (!fs.existsSync(USERS_FILE)) {
-    const seed = [
-      { username: 'superadmin', role: 'superadmin', created: new Date().toISOString().slice(0, 10) },
-      { username: 'admin', role: 'admin', created: new Date().toISOString().slice(0, 10) }
-    ];
-    fs.writeFileSync(USERS_FILE, JSON.stringify(seed, null, 2));
-    return seed;
-  }
-  return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+function userSeed() {
+  const today = new Date().toISOString().slice(0, 10);
+  return [
+    { username: 'superadmin', role: 'superadmin', created: today },
+    { username: 'admin', role: 'admin', created: today }
+  ];
 }
-const saveUsers = u => fs.writeFileSync(USERS_FILE, JSON.stringify(u, null, 2));
+const getUsers = () => readOrSeed('users', userSeed);
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { username } = req.body || {};
-  const u = getUsers().find(x => x.username.toLowerCase() === String(username || '').trim().toLowerCase());
+  const u = (await getUsers()).find(x => x.username.toLowerCase() === String(username || '').trim().toLowerCase());
   if (!u) return res.status(401).json({ error: 'Username tidak ditemukan' });
   res.json({ ok: true, username: u.username, role: u.role });
 });
-app.get('/api/users', (req, res) => res.json(getUsers().map(({ username, role, created }) => ({ username, role, created }))));
-app.post('/api/users', (req, res) => {
+app.get('/api/users', async (req, res) => res.json((await getUsers()).map(({ username, role, created }) => ({ username, role, created }))));
+app.post('/api/users', async (req, res) => {
   const { actor, username, role } = req.body || {};
-  const actorU = getUsers().find(x => x.username === actor);
-  if (!actorU || actorU.role !== 'superadmin') return res.status(403).json({ error: 'Hanya superadmin bisa menambah user' });
   const name = String(username || '').trim().toLowerCase();
   if (!name) return res.status(400).json({ error: 'Username wajib diisi' });
-  const us = getUsers();
-  if (us.find(x => x.username === name)) return res.status(409).json({ error: 'Username sudah dipakai' });
-  const nu = { username: name, role: ['superadmin','admin','anggota','medsos','customer'].includes(role) ? role : 'anggota', created: new Date().toISOString().slice(0, 10) };
-  us.push(nu); saveUsers(us); res.json(nu);
+  let forbidden = false, conflict = false, created = null;
+  await updateDoc('users', userSeed, (us) => {
+    const actorU = us.find(x => x.username === actor);
+    if (!actorU || actorU.role !== 'superadmin') { forbidden = true; return us; }
+    if (us.find(x => x.username === name)) { conflict = true; return us; }
+    created = { username: name, role: ['superadmin','admin','anggota','medsos','customer'].includes(role) ? role : 'anggota', created: new Date().toISOString().slice(0, 10) };
+    us.push(created);
+    return us;
+  });
+  if (forbidden) return res.status(403).json({ error: 'Hanya superadmin bisa menambah user' });
+  if (conflict) return res.status(409).json({ error: 'Username sudah dipakai' });
+  res.json(created);
 });
-app.delete('/api/users/:username', (req, res) => {
-  const actorU = getUsers().find(x => x.username === req.query.actor);
-  if (!actorU || actorU.role !== 'superadmin') return res.status(403).json({ error: 'Hanya superadmin bisa hapus user' });
+app.delete('/api/users/:username', async (req, res) => {
   const name = req.params.username.toLowerCase();
   if (name === 'superadmin') return res.status(400).json({ error: 'Superadmin utama tidak boleh dihapus' });
-  let us = getUsers();
-  if (!us.find(x => x.username === name)) return res.status(404).json({ error: 'User tidak ditemukan' });
-  saveUsers(us.filter(x => x.username !== name));
+  let forbidden = false, missing = false;
+  await updateDoc('users', userSeed, (us) => {
+    const actorU = us.find(x => x.username === req.query.actor);
+    if (!actorU || actorU.role !== 'superadmin') { forbidden = true; return us; }
+    if (!us.find(x => x.username === name)) { missing = true; return us; }
+    return us.filter(x => x.username !== name);
+  });
+  if (forbidden) return res.status(403).json({ error: 'Hanya superadmin bisa hapus user' });
+  if (missing) return res.status(404).json({ error: 'User tidak ditemukan' });
   res.json({ ok: true });
 });
 
 /* ================= PROJECTS ================= */
-app.get('/api/projects', (req, res) => {
-  const db = load();
+app.get('/api/projects', async (req, res) => {
+  const db = await load();
   res.json(db.projects.sort((a, b) => b.id.localeCompare(a.id)));
 });
 
-app.post('/api/projects', (req, res) => {
-  const db = load();
+app.post('/api/projects', async (req, res) => {
   const b = req.body || {};
   if (!b.nama || !b.layanan || !b.pic) return res.status(400).json({ error: 'Nama, layanan, dan PIC wajib diisi' });
-  const tgl = new Date().toISOString().slice(0, 10);
-  const p = {
-    id: 'KDS-' + String(db.counters.project++).padStart(3, '0'),
-    tgl, nama: b.nama, layanan: b.layanan,
-    pic: b.pic, klien: b.klien || '-', wa: (b.wa || '').replace(/\D/g, ''),
-    biaya: Number(b.biaya || 0), bayar: b.bayar || 'Belum Bayar', status: b.status || 'Baru Masuk',
-    input: b.input || '', output: b.output || '',
-    diagnosis: b.diagnosis || '', reportTeknisi: b.reportTeknisi || '',
-    garansiNum: Number(b.garansiNum || 0), garansiUnit: b.garansiUnit || 'bulan', garansiAkhir: '',
-    signature: b.signature || null,
-    fotoIn: [], fotoOut: []
-  };
-  if (p.status === 'Selesai / Closing' && p.garansiNum > 0)
-    p.garansiAkhir = addPeriode(tgl, p.garansiNum, p.garansiUnit);
-  db.projects.push(p); save(db); res.json(p);
+  const p = await update(db => {
+    const tgl = new Date().toISOString().slice(0, 10);
+    const project = {
+      id: 'KDS-' + String(db.counters.project++).padStart(3, '0'),
+      tgl, nama: b.nama, layanan: b.layanan,
+      pic: b.pic, klien: b.klien || '-', wa: (b.wa || '').replace(/\D/g, ''),
+      biaya: Number(b.biaya || 0), bayar: b.bayar || 'Belum Bayar', status: b.status || 'Baru Masuk',
+      input: b.input || '', output: b.output || '',
+      diagnosis: b.diagnosis || '', reportTeknisi: b.reportTeknisi || '',
+      garansiNum: Number(b.garansiNum || 0), garansiUnit: b.garansiUnit || 'bulan', garansiAkhir: '',
+      signature: b.signature || null,
+      fotoIn: [], fotoOut: []
+    };
+    if (project.status === 'Selesai / Closing' && project.garansiNum > 0)
+      project.garansiAkhir = addPeriode(tgl, project.garansiNum, project.garansiUnit);
+    db.projects.push(project);
+    return project;
+  });
+  res.json(p);
 });
 
-app.put('/api/projects/:id', (req, res) => {
-  const db = load();
-  const p = db.projects.find(x => x.id === req.params.id);
-  if (!p) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
-  const prevBayar = p.bayar, prevStatus = p.status;
-  Object.assign(p, req.body);
-  p.biaya = Number(p.biaya || 0);
-  p.garansiNum = Number(p.garansiNum || 0);
-  // garansi mulai berlalu saat closing
-  if (p.status === 'Selesai / Closing' && prevStatus !== 'Selesai / Closing' && p.garansiNum > 0 && !p.garansiAkhir)
-    p.garansiAkhir = addPeriode(new Date().toISOString().slice(0, 10), p.garansiNum, p.garansiUnit);
-  if (p.status !== 'Selesai / Closing') p.garansiAkhir = '';
-  if (prevBayar !== 'Lunas' && p.bayar === 'Lunas') {
-    db.transactions.push({
-      id: 'TRX-' + String(db.counters.trx++).padStart(3, '0'),
-      tgl: new Date().toISOString().slice(0, 10),
-      jenis: 'Uang Masuk',
-      kategori: p.layanan === 'DLL' ? 'DLL' : p.layanan,
-      nominal: p.biaya, pic: p.pic,
-      ket: `Pembayaran lunas ${p.id} — ${p.nama}`
-    });
-  }
-  save(db); res.json(p);
+app.put('/api/projects/:id', async (req, res) => {
+  let missing = false;
+  const p = await update(db => {
+    const project = db.projects.find(x => x.id === req.params.id);
+    if (!project) { missing = true; return null; }
+    const prevBayar = project.bayar, prevStatus = project.status;
+    Object.assign(project, req.body);
+    project.biaya = Number(project.biaya || 0);
+    project.garansiNum = Number(project.garansiNum || 0);
+    // garansi mulai berlalu saat closing
+    if (project.status === 'Selesai / Closing' && prevStatus !== 'Selesai / Closing' && project.garansiNum > 0 && !project.garansiAkhir)
+      project.garansiAkhir = addPeriode(new Date().toISOString().slice(0, 10), project.garansiNum, project.garansiUnit);
+    if (project.status !== 'Selesai / Closing') project.garansiAkhir = '';
+    if (prevBayar !== 'Lunas' && project.bayar === 'Lunas') {
+      db.transactions.push({
+        id: 'TRX-' + String(db.counters.trx++).padStart(3, '0'),
+        tgl: new Date().toISOString().slice(0, 10),
+        jenis: 'Uang Masuk',
+        kategori: project.layanan === 'DLL' ? 'DLL' : project.layanan,
+        nominal: project.biaya, pic: project.pic,
+        ket: `Pembayaran lunas ${project.id} — ${project.nama}`
+      });
+    }
+    return project;
+  });
+  if (missing) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
+  res.json(p);
 });
 
-app.delete('/api/projects/:id', (req, res) => {
-  const db = load();
-  const i = db.projects.findIndex(x => x.id === req.params.id);
-  if (i < 0) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
-  db.projects.splice(i, 1); save(db); res.json({ ok: true });
-});
-
-app.delete('/api/projects/:id/photo', (req, res) => {
-  const db = load();
-  const p = db.projects.find(x => x.id === req.params.id);
-  if (!p) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
-  const url = String(req.query.url || '');
-  const kind = req.query.kind === 'out' ? 'fotoOut' : 'fotoIn';
-  p[kind] = (p[kind] || []).filter(u => u !== url);
-  save(db);
-  try { const abs = path.join(__dirname, url.replace(/^\/+/, '')); if (abs.startsWith(UPLOADS) && fs.existsSync(abs)) fs.unlinkSync(abs); } catch (e) {}
+app.delete('/api/projects/:id', async (req, res) => {
+  let missing = false;
+  await update(db => {
+    const i = db.projects.findIndex(x => x.id === req.params.id);
+    if (i < 0) { missing = true; return; }
+    db.projects.splice(i, 1);
+  });
+  if (missing) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
   res.json({ ok: true });
 });
 
-app.post('/api/projects/:id/photo', upload.single('photo'), (req, res) => {
-  const db = load();
-  const p = db.projects.find(x => x.id === req.params.id);
-  if (!p) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
+app.delete('/api/projects/:id/photo', async (req, res) => {
+  const url = String(req.query.url || '');
+  const kind = req.query.kind === 'out' ? 'fotoOut' : 'fotoIn';
+  let missing = false;
+  await update(db => {
+    const p = db.projects.find(x => x.id === req.params.id);
+    if (!p) { missing = true; return; }
+    p[kind] = (p[kind] || []).filter(u => u !== url);
+  });
+  if (missing) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
+  await removeStored(url);
+  res.json({ ok: true });
+});
+
+app.post('/api/projects/:id/photo', upload.single('photo'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Tidak ada file' });
   const kind = req.query.kind === 'out' ? 'fotoOut' : 'fotoIn';
-  p[kind].push('/uploads/' + req.file.filename);
-  save(db); res.json({ url: '/uploads/' + req.file.filename, kind });
+  let url;
+  if (usingRemote()) {
+    const objectPath = `photos/${safeId(req.params.id)}-${Date.now()}-${Math.round(Math.random() * 1e6)}${safeExt(req.file.originalname)}`;
+    url = await uploadObject(objectPath, req.file.buffer, req.file.mimetype || 'application/octet-stream');
+  } else {
+    url = '/uploads/' + req.file.filename;
+  }
+  let missing = false;
+  await update(db => {
+    const p = db.projects.find(x => x.id === req.params.id);
+    if (!p) { missing = true; return; }
+    if (!Array.isArray(p[kind])) p[kind] = [];
+    p[kind].push(url);
+  });
+  if (missing) {
+    await removeStored(url);
+    return res.status(404).json({ error: 'Proyek tidak ditemukan' });
+  }
+  res.json({ url, kind });
 });
 
 /* ================= TRANSACTIONS ================= */
-app.get('/api/transactions', (req, res) => {
-  const db = load();
+app.get('/api/transactions', async (req, res) => {
+  const db = await load();
   let t = db.transactions.slice().reverse();
   const { dari, sampai } = req.query;
   if (dari) t = t.filter(x => x.tgl >= dari);
   if (sampai) t = t.filter(x => x.tgl <= sampai);
   res.json(t);
 });
-app.post('/api/transactions', (req, res) => {
-  const db = load();
+app.post('/api/transactions', async (req, res) => {
   const { tgl, jenis, kategori, nominal, pic, ket } = req.body || {};
   if (!jenis || !nominal) return res.status(400).json({ error: 'Jenis dan nominal wajib' });
-  const t = {
-    id: 'TRX-' + String(db.counters.trx++).padStart(3, '0'),
-    tgl: tgl || new Date().toISOString().slice(0, 10),
-    jenis, kategori: kategori || 'Operasional',
-    nominal: Number(nominal), pic: pic || '-', ket: ket || ''
-  };
-  db.transactions.push(t); save(db); res.json(t);
+  const t = await update(db => {
+    const trx = {
+      id: 'TRX-' + String(db.counters.trx++).padStart(3, '0'),
+      tgl: tgl || new Date().toISOString().slice(0, 10),
+      jenis, kategori: kategori || 'Operasional',
+      nominal: Number(nominal), pic: pic || '-', ket: ket || ''
+    };
+    db.transactions.push(trx);
+    return trx;
+  });
+  res.json(t);
 });
-app.delete('/api/transactions/:id', (req, res) => {
-  const db = load();
-  const i = db.transactions.findIndex(x => x.id === req.params.id);
-  if (i < 0) return res.status(404).json({ error: 'Tidak ditemukan' });
-  db.transactions.splice(i, 1); save(db); res.json({ ok: true });
+app.delete('/api/transactions/:id', async (req, res) => {
+  let missing = false;
+  await update(db => {
+    const i = db.transactions.findIndex(x => x.id === req.params.id);
+    if (i < 0) { missing = true; return; }
+    db.transactions.splice(i, 1);
+  });
+  if (missing) return res.status(404).json({ error: 'Tidak ditemukan' });
+  res.json({ ok: true });
 });
 
 /* ================= STATS (+ omzet + chart series) ================= */
-app.get('/api/stats', (req, res) => {
-  const db = load();
+app.get('/api/stats', async (req, res) => {
+  const db = await load();
   const ps = db.projects, trx = db.transactions;
   const inSum = trx.filter(t => t.jenis === 'Uang Masuk').reduce((s, t) => s + t.nominal, 0);
   const outSum = trx.filter(t => t.jenis === 'Uang Keluar').reduce((s, t) => s + t.nominal, 0);
@@ -306,8 +389,41 @@ function garansiText(p) {
   return s;
 }
 
-app.get('/api/pdf/project/:id', (req, res) => {
-  const db = load();
+async function resolveImage(src) {
+  if (!src || typeof src !== 'string') return null;
+  try {
+    if (/^https?:\/\//i.test(src)) {
+      const r = await fetch(src);
+      if (!r.ok) return null;
+      return Buffer.from(await r.arrayBuffer());
+    }
+    if (!src.startsWith('/uploads/')) return null;
+    const abs = path.resolve(UPLOADS_DIR, path.basename(src));
+    const root = path.resolve(UPLOADS_DIR) + path.sep;
+    if (!abs.startsWith(root) || !fs.existsSync(abs)) return null;
+    return fs.readFileSync(abs);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function prefetchImages(urls) {
+  const map = new Map();
+  for (const u of urls) {
+    if (!u || map.has(u)) continue;
+    map.set(u, await resolveImage(u));
+  }
+  return map;
+}
+
+function paint(doc, map, src, x, y, fit) {
+  const buf = map.get(src);
+  if (!buf) return;
+  try { doc.image(buf, x, y, { fit }); } catch (e) {}
+}
+
+app.get('/api/pdf/project/:id', async (req, res) => {
+  const db = await load();
   const p = db.projects.find(x => x.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'not found' });
   const doc = new PDFDocument({ margin: 50, size: 'A4' });
@@ -337,12 +453,13 @@ app.get('/api/pdf/project/:id', (req, res) => {
   doc.font('Helvetica-Bold').fontSize(11).fillColor('#7a4b8f').text('Dokumentasi Foto');
   doc.moveDown(0.4);
   const w = 225, h = 155;
+  const images = await prefetchImages([...(p.fotoIn || []), ...(p.fotoOut || [])]);
   const drawFoto = (arr, label, soft) => {
     (arr || []).forEach((u, i) => {
       if (doc.y + h + 26 > 760) { doc.addPage(); doc.y = 70; }
       const yFoto = doc.y;
       doc.roundedRect(50, yFoto, w, h, 8).fill(soft);
-      try { doc.image(path.join(__dirname, u), 50, yFoto, { fit: [w, h] }); } catch (e) {}
+      paint(doc, images, u, 50, yFoto, [w, h]);
       doc.font('Helvetica').fontSize(8.5).fillColor(C.ink).text(`${label} #${i + 1}`, 50, yFoto + h + 5, { width: w, align: 'center' });
       doc.y = yFoto + h + 24;
     });
@@ -374,8 +491,9 @@ app.get('/api/pdf/project/:id', (req, res) => {
   footerNote(doc); doc.end();
 });
 
-app.get('/api/pdf/projects', (req, res) => {
-  const db = load();
+app.get('/api/pdf/projects', async (req, res) => {
+  const db = await load();
+  const images = await prefetchImages(db.projects.flatMap(p => [...(p.fotoIn || []), ...(p.fotoOut || [])]));
   const doc = new PDFDocument({ margin: 50, size: 'A4' });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', 'attachment; filename="Rekap-Proyek.pdf"');
@@ -418,7 +536,7 @@ app.get('/api/pdf/projects', (req, res) => {
         const fy = doc.y;
         const fw = 120, fh = 82;
         doc.roundedRect(56, fy, fw, fh, 6).fill(soft);
-        try { doc.image(path.join(__dirname, u), 56, fy, { fit: [fw, fh] }); } catch (e) {}
+        paint(doc, images, u, 56, fy, [fw, fh]);
         doc.font('Helvetica').fontSize(7.5).fillColor('#666').text(`${label} #${i + 1}`, 56, fy + fh + 3, { width: fw, align: 'center' });
         doc.y = fy + fh + 18;
       });
@@ -433,7 +551,7 @@ app.get('/api/pdf/projects', (req, res) => {
         const fy = doc.y;
         const fw = 120, fh = 82;
         doc.roundedRect(x, fy, fw, fh, 6).fill(soft);
-        try { doc.image(path.join(__dirname, u), x, fy, { fit: [fw, fh] }); } catch (e) {}
+        paint(doc, images, u, x, fy, [fw, fh]);
         doc.font('Helvetica').fontSize(7.5).fillColor('#666').text(`${label} #${i + 1}`, x, fy + fh + 3, { width: fw, align: 'center' });
       });
       if (twoCol) {
@@ -461,8 +579,8 @@ app.get('/api/pdf/projects', (req, res) => {
   footerNote(doc); doc.end();
 });
 
-app.get('/api/pdf/finance', (req, res) => {
-  const db = load();
+app.get('/api/pdf/finance', async (req, res) => {
+  const db = await load();
   const periode = req.query.periode || 'all';
   const daysMap = { '1w': 7, '1m': 30, '3m': 91, '6m': 182, '1y': 365 };
   const labelMap = { '1w': '1 MINGGU', '1m': '1 BULAN', '3m': '3 BULAN', '6m': '6 BULAN', '1y': '1 TAHUN', all: 'SEMUA PERIODE' };
@@ -524,8 +642,8 @@ app.get('/api/pdf/finance', (req, res) => {
   footerNote(doc); doc.end();
 });
 
-app.get('/api/pdf/master', (req, res) => {
-  const db = load();
+app.get('/api/pdf/master', async (req, res) => {
+  const db = await load();
   const trx = db.transactions;
   const inSum = trx.filter(t => t.jenis === 'Uang Masuk').reduce((s, t) => s + t.nominal, 0);
   const outSum = trx.filter(t => t.jenis === 'Uang Keluar').reduce((s, t) => s + t.nominal, 0);
@@ -577,8 +695,8 @@ const sendCsv = (res, filename, headers, rows) => {
   res.send('\ufeff' + [headers, ...rows].map(r => r.map(csvCell).join(';')).join('\r\n'));
 };
 
-app.get('/api/export/projects.csv', (req, res) => {
-  const db = load();
+app.get('/api/export/projects.csv', async (req, res) => {
+  const db = await load();
   const H = ['ID', 'Tanggal', 'Nama Proyek', 'Layanan', 'PIC', 'Klien', 'No WA', 'Biaya', 'Status Bayar', 'Status Pengerjaan',
     'Input dari Klien', 'Diagnosis Awal', 'Output / Hasil', 'Laporan Teknisi', 'Garansi (angka)', 'Garansi (satuan)', 'Garansi Berlaku s.d.',
     'Jumlah Foto Masuk', 'Jumlah Foto Closing', 'Ada Tanda Tangan'];
@@ -589,126 +707,145 @@ app.get('/api/export/projects.csv', (req, res) => {
   ]));
 });
 
-app.get('/api/export/transactions.csv', (req, res) => {
-  const db = load();
+app.get('/api/export/transactions.csv', async (req, res) => {
+  const db = await load();
   const H = ['ID', 'Tanggal', 'Jenis', 'Kategori', 'Nominal', 'PIC Keuangan', 'Keterangan'];
   sendCsv(res, 'Kudostack-Keuangan-Lengkap.csv', H,
     db.transactions.slice().sort((a, b) => a.tgl.localeCompare(b.tgl))
       .map(t => [t.id, t.tgl, t.jenis, t.kategori, t.nominal, t.pic, t.ket]));
 });
 
-app.get('/api/export/projects.json', (req, res) => {
+app.get('/api/export/projects.json', async (req, res) => {
   res.setHeader('Content-Disposition', 'attachment; filename="Kudostack-Proyek-Lengkap.json"');
-  res.json(load().projects);
+  res.json((await load()).projects);
 });
-app.get('/api/export/transactions.json', (req, res) => {
+app.get('/api/export/transactions.json', async (req, res) => {
   res.setHeader('Content-Disposition', 'attachment; filename="Kudostack-Keuangan-Lengkap.json"');
-  res.json(load().transactions);
+  res.json((await load()).transactions);
 });
 
 /* ================= KIRIM WA ================= */
-const WA_OUTBOX = path.join(__dirname, 'data', 'wa-outbox.json');
-app.post('/api/send-wa', (req, res) => {
+app.post('/api/send-wa', async (req, res) => {
   const { to, message } = req.body || {};
   if (!to || !message) return res.status(400).json({ error: 'Nomor tujuan & pesan wajib' });
-  const outbox = fs.existsSync(WA_OUTBOX) ? JSON.parse(fs.readFileSync(WA_OUTBOX, 'utf8')) : [];
   const item = {
     id: 'WA-' + Date.now(), to: String(to).replace(/\D/g, ''), message,
     footerIncluded: message.includes('+62 851-6585-9837'),
     createdAt: new Date().toISOString(), status: 'queued'
   };
-  outbox.push(item);
-  fs.writeFileSync(WA_OUTBOX, JSON.stringify(outbox, null, 2));
+  await updateDoc('wa-outbox', () => [], (outbox) => {
+    const list = Array.isArray(outbox) ? outbox : [];
+    list.push(item);
+    return list;
+  });
   res.json({ ok: true, id: item.id, note: 'Masuk antrean kirim WA server (outbox).' });
 });
-app.get('/api/send-wa/outbox', (req, res) => {
-  res.json(fs.existsSync(WA_OUTBOX) ? JSON.parse(fs.readFileSync(WA_OUTBOX, 'utf8')) : []);
+app.get('/api/send-wa/outbox', async (req, res) => {
+  const existing = await loadDoc('wa-outbox');
+  res.json(Array.isArray(existing) ? existing : []);
 });
 
 /* ================= CONTENT PLANNER (kalender konten medsos) ================= */
-const PLANS_FILE = path.join(__dirname, 'data', 'plans.json');
-function getPlans() {
-  if (!fs.existsSync(PLANS_FILE)) fs.writeFileSync(PLANS_FILE, '[]');
-  return JSON.parse(fs.readFileSync(PLANS_FILE, 'utf8'));
-}
-const savePlans = p => fs.writeFileSync(PLANS_FILE, JSON.stringify(p, null, 2));
+const getPlans = () => readOrSeed('plans', () => []);
 
-app.get('/api/plans', (req, res) => res.json(getPlans()));
-app.post('/api/plans', (req, res) => {
+app.get('/api/plans', async (req, res) => res.json(await getPlans()));
+app.post('/api/plans', async (req, res) => {
   const { actor, tanggal, judul, platform, brief, prompt, caption } = req.body || {};
-  const actorU = getUsers().find(x => x.username === actor);
+  const actorU = (await getUsers()).find(x => x.username === actor);
   if (!actorU || !['superadmin', 'admin', 'medsos'].includes(actorU.role))
     return res.status(403).json({ error: 'Hanya superadmin/admin/medsos bisa kelola konten' });
   if (!tanggal || !judul) return res.status(400).json({ error: 'Tanggal & judul wajib' });
-  const plans = getPlans();
   const item = {
     id: 'CP-' + Date.now(),
     tanggal, judul, platform: platform || 'Instagram',
     brief: brief || '', prompt: prompt || '', caption: caption || '',
     status: 'Draft', dibuat: actor || '-', createdAt: new Date().toISOString()
   };
-  plans.push(item); savePlans(plans); res.json(item);
+  await updateDoc('plans', () => [], (plans) => {
+    const list = Array.isArray(plans) ? plans : [];
+    list.push(item);
+    return list;
+  });
+  res.json(item);
 });
-app.put('/api/plans/:id', (req, res) => {
-  const actorU = getUsers().find(x => x.username === (req.body || {}).actor);
+app.put('/api/plans/:id', async (req, res) => {
+  const actorU = (await getUsers()).find(x => x.username === (req.body || {}).actor);
   if (!actorU || !['superadmin', 'admin', 'medsos'].includes(actorU.role))
     return res.status(403).json({ error: 'Tidak punya akses' });
-  const plans = getPlans();
-  const p = plans.find(x => x.id === req.params.id);
-  if (!p) return res.status(404).json({ error: 'Tidak ditemukan' });
-  const allow = ['tanggal', 'judul', 'platform', 'brief', 'prompt', 'caption', 'status'];
-  allow.forEach(k => { if (req.body[k] !== undefined) p[k] = req.body[k]; });
-  savePlans(plans); res.json(p);
+  let missing = false, saved = null;
+  await updateDoc('plans', () => [], (plans) => {
+    const list = Array.isArray(plans) ? plans : [];
+    const p = list.find(x => x.id === req.params.id);
+    if (!p) { missing = true; return list; }
+    const allow = ['tanggal', 'judul', 'platform', 'brief', 'prompt', 'caption', 'status'];
+    allow.forEach(k => { if (req.body[k] !== undefined) p[k] = req.body[k]; });
+    saved = p;
+    return list;
+  });
+  if (missing) return res.status(404).json({ error: 'Tidak ditemukan' });
+  res.json(saved);
 });
-app.delete('/api/plans/:id', (req, res) => {
-  const actorU = getUsers().find(x => x.username === req.query.actor);
+app.delete('/api/plans/:id', async (req, res) => {
+  const actorU = (await getUsers()).find(x => x.username === req.query.actor);
   if (!actorU || !['superadmin', 'admin', 'medsos'].includes(actorU.role))
     return res.status(403).json({ error: 'Tidak punya akses' });
-  savePlans(getPlans().filter(x => x.id !== req.params.id));
+  await updateDoc('plans', () => [], (plans) => (Array.isArray(plans) ? plans : []).filter(x => x.id !== req.params.id));
   res.json({ ok: true });
 });
 
 
 /* ================= QRIS PEMBAYARAN (editable superadmin/admin) ================= */
-const QRIS_IMG = path.join(__dirname, 'public', 'qris.jpg');
-const QRIS_META = path.join(__dirname, 'data', 'qris-meta.json');
-function getQrisMeta() {
-  if (!fs.existsSync(QRIS_META)) return { nama: 'KUDOSTACK, Service', nmid: 'ID1026635766458', tipe: 'Statis (selamanya)', diubah: '-', oleh: '-' };
-  return JSON.parse(fs.readFileSync(QRIS_META, 'utf8'));
+const QRIS_DEFAULT = { nama: 'KUDOSTACK, Service', nmid: 'ID1026635766458', tipe: 'Statis (selamanya)', diubah: '-', oleh: '-' };
+async function getQrisMeta() {
+  const existing = await loadDoc('qris-meta');
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)) return { ...QRIS_DEFAULT };
+  return existing;
 }
-app.get('/api/qris', (req, res) => res.json(getQrisMeta()));
-app.post('/api/qris', (req, res) => {
-  const u = getUsers().find(x => x.username === req.query.actor);
+app.get('/api/qris', async (req, res) => res.json(await getQrisMeta()));
+app.post('/api/qris', async (req, res) => {
+  const u = (await getUsers()).find(x => x.username === req.query.actor);
   if (!u || !['superadmin', 'admin'].includes(u.role))
     return res.status(403).json({ error: 'Hanya superadmin/admin bisa mengganti QRIS' });
   const { nama, nmid, tipe } = req.body || {};
-  const meta = getQrisMeta();
-  if (nama !== undefined) meta.nama = nama;
-  if (nmid !== undefined) meta.nmid = nmid;
-  if (tipe !== undefined) meta.tipe = tipe;
-  meta.diubah = new Date().toISOString().slice(0, 10);
-  meta.oleh = req.query.actor;
-  fs.writeFileSync(QRIS_META, JSON.stringify(meta, null, 2));
+  const meta = await updateDoc('qris-meta', () => ({ ...QRIS_DEFAULT }), (current) => {
+    const next = (!current || typeof current !== 'object' || Array.isArray(current)) ? { ...QRIS_DEFAULT } : current;
+    if (nama !== undefined) next.nama = nama;
+    if (nmid !== undefined) next.nmid = nmid;
+    if (tipe !== undefined) next.tipe = tipe;
+    next.diubah = new Date().toISOString().slice(0, 10);
+    next.oleh = req.query.actor;
+    return next;
+  });
   res.json({ ok: true, meta });
 });
-app.post('/api/qris/image', (req, res) => {
-  const u = getUsers().find(x => x.username === req.query.actor);
+app.post('/api/qris/image', async (req, res) => {
+  const u = (await getUsers()).find(x => x.username === req.query.actor);
   if (!u || !['superadmin', 'admin'].includes(u.role))
     return res.status(403).json({ error: 'Hanya superadmin/admin bisa mengganti QRIS' });
   const b64 = (req.body || {}).image || '';
   const m = b64.match(/^data:image\/(png|jpe?g);base64,(.+)$/);
   if (!m) return res.status(400).json({ error: 'File harus gambar PNG/JPG (maks 5 MB)' });
-  fs.writeFileSync(QRIS_IMG, Buffer.from(m[2], 'base64'));
-  const meta = getQrisMeta();
-  meta.diubah = new Date().toISOString().slice(0, 10);
-  meta.oleh = req.query.actor;
-  fs.writeFileSync(QRIS_META, JSON.stringify(meta, null, 2));
+  const buf = Buffer.from(m[2], 'base64');
+  const contentType = m[1] === 'png' ? 'image/png' : 'image/jpeg';
+  let imageUrl = null;
+  if (usingRemote()) imageUrl = await uploadObject('qris/current', buf, contentType);
+  else {
+    fs.mkdirSync(path.dirname(QRIS_IMG), { recursive: true });
+    fs.writeFileSync(QRIS_IMG, buf);
+  }
+  await updateDoc('qris-meta', () => ({ ...QRIS_DEFAULT }), (current) => {
+    const next = (!current || typeof current !== 'object' || Array.isArray(current)) ? { ...QRIS_DEFAULT } : current;
+    if (imageUrl) next.imageUrl = imageUrl;
+    else delete next.imageUrl;
+    next.diubah = new Date().toISOString().slice(0, 10);
+    next.oleh = req.query.actor;
+    return next;
+  });
   res.json({ ok: true });
 });
 
 
 /* ================= META PEMBAYARAN (ewallet/bank/va) + LOKASI — editable superadmin/admin ================= */
-const PAYMETA_FILE = path.join(__dirname, 'data', 'paymeta.json');
 const DEF_PAYMETA = {
   ewallet: [
     { nama: 'GoPay', nomor: '0851-6585-9837' }, { nama: 'OVO', nomor: '0851-6585-9837' },
@@ -725,24 +862,43 @@ const DEF_PAYMETA = {
   an: 'Kudostack Official',
   lokasi: { alamat: '', lat: null, lng: null, catatan: '' }
 };
-function getPayMeta() {
-  if (!fs.existsSync(PAYMETA_FILE)) return DEF_PAYMETA;
-  try { const d = JSON.parse(fs.readFileSync(PAYMETA_FILE, 'utf8')); return { ...DEF_PAYMETA, ...d }; }
-  catch (e) { return DEF_PAYMETA; }
+async function getPayMeta() {
+  const existing = await loadDoc('paymeta');
+  if (!existing || typeof existing !== 'object' || Array.isArray(existing)) return JSON.parse(JSON.stringify(DEF_PAYMETA));
+  return { ...DEF_PAYMETA, ...existing };
 }
-app.get('/api/paymeta', (req, res) => res.json(getPayMeta()));
-app.put('/api/paymeta', (req, res) => {
-  const u = getUsers().find(x => x.username === req.query.actor);
+app.get('/api/paymeta', async (req, res) => res.json(await getPayMeta()));
+app.put('/api/paymeta', async (req, res) => {
+  const u = (await getUsers()).find(x => x.username === req.query.actor);
   if (!u || !['superadmin', 'admin'].includes(u.role))
     return res.status(403).json({ error: 'Hanya superadmin/admin' });
-  const meta = getPayMeta();
   const b = req.body || {};
-  ['ewallet', 'bank', 'va'].forEach(k => { if (Array.isArray(b[k])) meta[k] = b[k]; });
-  if (b.an !== undefined) meta.an = b.an;
-  if (b.lokasi && typeof b.lokasi === 'object') meta.lokasi = { ...meta.lokasi, ...b.lokasi };
-  fs.writeFileSync(PAYMETA_FILE, JSON.stringify(meta, null, 2));
+  const meta = await updateDoc('paymeta', () => JSON.parse(JSON.stringify(DEF_PAYMETA)), (current) => {
+    const next = (!current || typeof current !== 'object' || Array.isArray(current))
+      ? JSON.parse(JSON.stringify(DEF_PAYMETA))
+      : { ...DEF_PAYMETA, ...current };
+    ['ewallet', 'bank', 'va'].forEach(k => { if (Array.isArray(b[k])) next[k] = b[k]; });
+    if (b.an !== undefined) next.an = b.an;
+    if (b.lokasi && typeof b.lokasi === 'object') next.lokasi = { ...next.lokasi, ...b.lokasi };
+    return next;
+  });
   res.json({ ok: true, meta });
 });
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Endpoint tidak ditemukan' }));
-app.listen(PORT, () => console.log(`Kudostack Admin Hub running on http://localhost:${PORT}`));
+app.use((err, req, res, next) => {
+  console.error(err);
+  if (res.headersSent) return next(err);
+  if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'Maksimal 10 MB' });
+  res.status(500).json({ error: 'Terjadi kesalahan server' });
+});
+
+initPersistence().then(info => {
+  app.listen(PORT, '0.0.0.0', () => {
+    const where = info.mode === 'supabase' ? `supabase bucket ${info.bucket}` : 'local files';
+    console.log(`Kudostack Admin Hub running on http://0.0.0.0:${PORT} (${where})`);
+  });
+}).catch(err => {
+  console.error(err.message || err);
+  process.exit(1);
+});

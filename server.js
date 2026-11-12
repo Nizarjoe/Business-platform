@@ -327,9 +327,11 @@ app.get('/api/pdf/project/:id', (req, res) => {
     ['LAPORAN HASIL TEKNISI', p.reportTeknisi || '-']
   ];
   rows.forEach(([k, v]) => {
-    doc.font('Helvetica-Bold').fontSize(9.5).fillColor('#7a4b8f').text(k, 50, doc.y);
-    doc.font('Helvetica').fontSize(9.5).fillColor(C.ink).text(String(v || '-'), 220, doc.y - 12, { width: 325 });
-    doc.moveDown(0.35);
+    const vStr = String(v || '-');
+    if (doc.y > 720) { doc.addPage(); doc.y = 70; }
+    doc.font('Helvetica-Bold').fontSize(9.5).fillColor('#7a4b8f').text(k, 50, doc.y + 2, { width: 160 });
+    doc.font('Helvetica').fontSize(9.5).fillColor(C.ink).text(vStr, 220, doc.y, { width: 325 });
+    doc.moveDown(0.45);
   });
   doc.moveDown(0.5);
   doc.font('Helvetica-Bold').fontSize(11).fillColor('#7a4b8f').text('Dokumentasi Foto');
@@ -436,6 +438,8 @@ app.get('/api/pdf/finance', (req, res) => {
     ['Saldo Bersih', rupiah(inSum - outSum), '#efe3ff'], ['Jumlah Transaksi', String(trx.length), C.blueSoft]
   ], doc.y);
   doc.y = y;
+  doc.font('Helvetica-Bold').fontSize(12).fillColor('#7a4b8f').text('RINCIAN TRANSAKSI');
+  doc.moveDown(0.3);
   // kolom Keterangan dilebarkan, kolom lain disesuaikan
   colorfulTable(doc, ['ID', 'Tanggal', 'Jenis', 'Kategori', 'PIC', 'Nominal', 'Keterangan'],
     trx.map(t => [t.id, t.tgl, colored(t.jenis, t.jenis === 'Uang Masuk' ? '#137a42' : '#b91c1c'), t.kategori, t.pic, money(t.nominal), t.ket]),
@@ -616,6 +620,44 @@ app.delete('/api/plans/:id', (req, res) => {
   if (!actorU || !['superadmin', 'admin', 'medsos'].includes(actorU.role))
     return res.status(403).json({ error: 'Tidak punya akses' });
   savePlans(getPlans().filter(x => x.id !== req.params.id));
+  res.json({ ok: true });
+});
+
+
+/* ================= QRIS PEMBAYARAN (editable superadmin/admin) ================= */
+const QRIS_IMG = path.join(__dirname, 'public', 'qris.jpg');
+const QRIS_META = path.join(__dirname, 'data', 'qris-meta.json');
+function getQrisMeta() {
+  if (!fs.existsSync(QRIS_META)) return { nama: 'KUDOSTACK, Service', nmid: 'ID1026635766458', tipe: 'Statis (selamanya)', diubah: '-', oleh: '-' };
+  return JSON.parse(fs.readFileSync(QRIS_META, 'utf8'));
+}
+app.get('/api/qris', (req, res) => res.json(getQrisMeta()));
+app.post('/api/qris', (req, res) => {
+  const u = getUsers().find(x => x.username === req.query.actor);
+  if (!u || !['superadmin', 'admin'].includes(u.role))
+    return res.status(403).json({ error: 'Hanya superadmin/admin bisa mengganti QRIS' });
+  const { nama, nmid, tipe } = req.body || {};
+  const meta = getQrisMeta();
+  if (nama !== undefined) meta.nama = nama;
+  if (nmid !== undefined) meta.nmid = nmid;
+  if (tipe !== undefined) meta.tipe = tipe;
+  meta.diubah = new Date().toISOString().slice(0, 10);
+  meta.oleh = req.query.actor;
+  fs.writeFileSync(QRIS_META, JSON.stringify(meta, null, 2));
+  res.json({ ok: true, meta });
+});
+app.post('/api/qris/image', (req, res) => {
+  const u = getUsers().find(x => x.username === req.query.actor);
+  if (!u || !['superadmin', 'admin'].includes(u.role))
+    return res.status(403).json({ error: 'Hanya superadmin/admin bisa mengganti QRIS' });
+  const b64 = (req.body || {}).image || '';
+  const m = b64.match(/^data:image\/(png|jpe?g);base64,(.+)$/);
+  if (!m) return res.status(400).json({ error: 'File harus gambar PNG/JPG (maks 5 MB)' });
+  fs.writeFileSync(QRIS_IMG, Buffer.from(m[2], 'base64'));
+  const meta = getQrisMeta();
+  meta.diubah = new Date().toISOString().slice(0, 10);
+  meta.oleh = req.query.actor;
+  fs.writeFileSync(QRIS_META, JSON.stringify(meta, null, 2));
   res.json({ ok: true });
 });
 

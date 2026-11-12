@@ -165,6 +165,9 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
   .tbl-wrap{font-size:.72rem}
   td,th{padding:6px 4px}
 }
+.panel h3{letter-spacing:.2px}
+.tbl-wrap table td small{display:block;color:#888;font-size:.68rem}
+@media(max-width:640px){.cards{grid-template-columns:1fr 1fr}.card{padding:10px}}
 </style>
 </head>
 <body>
@@ -405,8 +408,8 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
       <button class="btn" onclick="dl('/api/pdf/finance?periode=all')">Semua</button>
     </div></div>
   <div class="cards">
-    <div class="card"><small>3️⃣ Rekap Semua Proyek</small><br><button class="btn purple" onclick="dl('/api/pdf/projects')">⬇ Download</button></div>
-    <div class="card"><small>4️⃣ Master Report</small><br><button class="btn purple" onclick="dl('/api/pdf/master')">⬇ Download</button></div>
+    <div class="card"><small>📋 Rekap Semua Proyek</small><br><small style="color:#888">Tabel + detail lengkap tiap proyek</small><br><button class="btn purple" onclick="dl('/api/pdf/projects')">⬇ Download</button></div>
+    <div class="card"><small>📚 Master Report</small><br><small style="color:#888">Gabungan proyek + keuangan</small><br><button class="btn purple" onclick="dl('/api/pdf/master')">⬇ Download</button></div>
   </div>
   <div class="panel"><h3>5️⃣ Export Data Mentah (SEMUA inputan — keuangan & proyek)</h3>
     <p style="font-size:.78rem;color:#666;margin:6px 0 10px">CSV/JSON berisi seluruh field: keluhan klien, diagnosis, output, laporan teknisi, garansi, semua transaksi keuangan + keterangan. Cocok untuk backup / Excel.</p>
@@ -422,6 +425,7 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
   <div class="ptitle"><h2>👥 Kelola User</h2></div>
   <div class="panel">
     <h3>➕ Tambah User Baru</h3>
+    <p style="font-size:.78rem;color:#666;margin:4px 0 8px">Role menentukan menu yang bisa diakses: superadmin (semua), admin (tanpa kelola user), anggota (proyek+kas+WA), medsos (planner+sosmed), customer (lihat proyek & bayar).</p>
     <div class="frm2">
       <div><label>Username Baru</label><input id="nu_name" placeholder="cth: teknisi1"></div>
       <div><label>Role</label><select id="nu_role"><option>anggota</option><option>admin</option><option>medsos</option><option>customer</option><option>superadmin</option></select></div>
@@ -710,16 +714,7 @@ async function sendWA(i){const p=PROJECTS.find(x=>x.id===waProj.value);
 
 /* PEMBAYARAN CUSTOMER */
 const PAY={
-  qris:`<div class="qrisbox">
-    <img src="/qris.jpg" alt="QRIS KUDOSTACK" class="qrisreal" onclick="zoom('/qris.jpg')" style="cursor:zoom-in">
-    <div class="payinfo" style="flex:1;min-width:200px">
-      <b class="nm">Scan QRIS — semua e-wallet & m-banking</b><br>
-      <small style="color:#666">GoPay · OVO · DANA · ShopeePay · LinkAja · Semua bank</small>
-      <div class="payrow"><span>Nama</span><b>KUDOSTACK, Service</b></div>
-      <div class="payrow"><span>NMID</span><b>ID1026635766458</b></div>
-      <div class="payrow"><span>QR berlaku</span><b>Statis (selamanya)</b></div>
-      <small style="color:#888">Klik gambar QR untuk perbesar · kirim bukti transfer ke WA admin 🙏</small>
-    </div></div>`,
+  qris:`<div class="qrisbox" id="qrisBox"><i style="color:#999">Memuat QRIS…</i></div>`,
   ewallet:`<div class="payinfo">
       <b class="nm">📱 E-Wallet</b>
       <div class="payrow"><span>GoPay</span><b>0851-6585-9837</b></div>
@@ -745,9 +740,52 @@ const PAY={
       <small style="color:#888">Nomor VA terverifikasi bank — slip otomatis masuk ke rekening a.n. Kudostack</small>
     </div>`
 };
-function renderPay(tab){
+async function renderPay(tab){
   document.querySelectorAll('.paytab').forEach(b=>b.classList.toggle('on',b.dataset.pay===tab));
-  const el=document.getElementById('payBody');if(el)el.innerHTML=PAY[tab]||'';
+  const el=document.getElementById('payBody');if(!el)return;
+  if(tab==='qris'){
+    el.innerHTML=PAY.qris;
+    const meta=await fetch('/api/qris').then(r=>r.json()).catch(()=>({nama:'KUDOSTACK, Service',nmid:'-',tipe:'Statis'}));
+    const canEdit=ME&&['superadmin','admin'].includes(ME.role);
+    const qrisCache='/qris.jpg?v='+Date.now();
+    el.innerHTML=`<div class="qrisbox">
+      <img src="${qrisCache}" alt="QRIS KUDOSTACK" class="qrisreal" onclick="zoom('${qrisCache}')" style="cursor:zoom-in">
+      <div class="payinfo" style="flex:1;min-width:200px">
+        <b class="nm">Scan QRIS — semua e-wallet & m-banking</b><br>
+        <small style="color:#666">GoPay · OVO · DANA · ShopeePay · LinkAja · Semua bank</small>
+        <div class="payrow"><span>Nama</span><b>${esc(meta.nama)}</b></div>
+        <div class="payrow"><span>NMID</span><b>${esc(meta.nmid)}</b></div>
+        <div class="payrow"><span>QR berlaku</span><b>${esc(meta.tipe)}</b></div>
+        ${meta.diubah&&meta.diubah!=='-'?`<small style="color:#888">Terakhir diubah ${esc(meta.diubah)} oleh ${esc(meta.oleh)}</small>`:''}
+        <small style="color:#888">Klik gambar QR untuk perbesar · kirim bukti transfer ke WA admin 🙏</small>
+      </div></div>
+      ${canEdit?`<div class="panel" style="margin-top:14px">
+        <h3>🔑 Ganti QRIS (khusus superadmin & admin)</h3>
+        <div class="frm2">
+          <div><label>Nama Tertera</label><input id="qr_nama" value="${esc(meta.nama)}"></div>
+          <div><label>NMID</label><input id="qr_nmid" value="${esc(meta.nmid)}"></div>
+          <div><label>Jenis QR</label><select id="qr_tipe"><option${meta.tipe.includes('Statis')?' selected':''}>Statis (selamanya)</option><option${meta.tipe.includes('Dinamis')?' selected':''}>Dinamis (per transaksi)</option></select></div>
+        </div>
+        <div class="flex" style="margin-top:10px;gap:8px;flex-wrap:wrap">
+          <button class="btn blue" onclick="saveQrisMeta()">💾 Simpan Info</button>
+          <button class="btn purple" onclick="document.getElementById('qrFile').click()">🖼️ Ganti Gambar QR</button>
+          <input type="file" id="qrFile" accept="image/*" style="display:none" onchange="uploadQrisImg(this)">
+        </div>
+        <small style="color:#888;display:block;margin-top:6px">Gambar QR baru langsung tampil untuk semua user (customer juga).</small>
+      </div>`:''}`;
+  } else el.innerHTML=PAY[tab]||'';
+}
+async function saveQrisMeta(){
+  const r=await fetch('/api/qris?actor='+ME.username,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nama:qr_nama.value,nmid:qr_nmid.value,tipe:qr_tipe.value})});
+  if(r.ok){toast('Info QRIS tersimpan ✓');renderPay('qris');}else toast('Gagal simpan');
+}
+async function uploadQrisImg(inp){
+  const f=inp.files[0];if(!f)return;
+  if(f.size>5*1024*1024){toast('Maksimal 5 MB');return;}
+  toast('Mengunggah QR baru…');
+  const b64=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.readAsDataURL(f);});
+  const rr=await fetch('/api/qris/image?actor='+ME.username,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:b64})});
+  if(rr.ok){toast('Gambar QRIS diganti ✓');renderPay('qris');}else toast('Gagal ganti gambar');
 }
 document.addEventListener('click',e=>{const t=e.target.closest('.paytab');if(t)renderPay(t.dataset.pay);});
 

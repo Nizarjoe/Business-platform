@@ -1,0 +1,17 @@
+# Kudostack Admin Hub on Render's free web service tier.
+# Data and uploads live in Supabase; this service has no disk to persist.
+services:
+  - type: web
+    name: kudostack-admin-hub
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        value: uploads

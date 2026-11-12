@@ -168,6 +168,29 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
 .panel h3{letter-spacing:.2px}
 .tbl-wrap table td small{display:block;color:#888;font-size:.68rem}
 @media(max-width:640px){.cards{grid-template-columns:1fr 1fr}.card{padding:10px}}
+
+/* ===== KARTU PROYEK ===== */
+.projcard{background:#fff;border:var(--brd);border-radius:16px;box-shadow:6px 6px 0 #111;padding:16px;margin-bottom:16px;page-break-inside:avoid}
+.pc-head{display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px}
+.pc-id{background:var(--pink2);color:#fff;padding:2px 10px;border-radius:999px;font-size:.8rem}
+.pc-tgl{display:block;color:#888;font-size:.68rem;margin-top:4px}
+.pc-nama{margin:6px 0 4px;font-size:1.05rem}
+.pc-nama a{color:var(--pink2);text-decoration:none}
+.pc-badges{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
+.pc-progress{margin:12px 0}
+.pc-bar{background:#fff;border:2px solid #111;border-radius:999px;height:18px;overflow:hidden}
+.pc-bar>div{height:100%;background:linear-gradient(90deg,var(--pink),var(--blue));transition:width .6s}
+.pc-steps{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;font-size:.66rem;font-weight:800}
+.pc-steps .done{color:var(--pink2)}
+.pc-steps span:not(.done){color:#bbb}
+.pc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin:12px 0;border:2px dashed #e8b4d8;border-radius:12px;padding:10px}
+.pc-grid small:first-child{display:block;color:#888;font-size:.66rem;text-transform:uppercase;letter-spacing:.5px}
+.pc-grid b{font-size:.85rem}
+.pc-fotos{margin:8px 0}
+.pc-upload{display:flex;gap:8px;flex-wrap:wrap}
+.pc-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;border-top:2px dashed #eee;padding-top:10px}
+@media(max-width:640px){.pc-badges{margin-left:0}.projcard{padding:12px}}
+
 </style>
 </head>
 <body>
@@ -647,14 +670,45 @@ function detail(id){const p=PROJECTS.find(x=>x.id===id);
   <p><b>🛡️ Garansi:</b> ${p.garansiNum?`${p.garansiNum} ${p.garansiUnit}${p.garansiAkhir?' — s.d. '+p.garansiAkhir:''}`:'tidak ada'}</p>`;
   $('#modal').classList.add('on');}
 function renderProj(){
-  $('#tProj').innerHTML=`<colgroup><col style="width:8%"><col style="width:13%"><col style="width:7%"><col style="width:10%"><col style="width:8%"><col style="width:7%"><col style="width:12%"><col style="width:13%"><col style="width:7%"><col style="width:10%"><col style="width:5%"></colgroup><tr><th>ID</th><th>Proyek</th><th>Layanan</th><th>Klien</th><th>Biaya</th><th>Bayar</th><th>Status</th><th>Garansi</th><th>PIC</th><th>Foto</th><th>Aksi</th></tr>`+
-    PROJECTS.map(p=>`<tr><td><b>${p.id}</b><small>${p.tgl}</small></td>
-    <td><a href="#" onclick="detail('${p.id}');return false" style="color:var(--pink2)"><b>${esc(p.nama)}</b></a></td><td>${p.layanan}</td>
-    <td>${esc(p.klien)}<small>${esc(p.wa)}</small></td><td>${rupiah(p.biaya)}</td><td>${bayarBadge(p.bayar)}</td><td>${statusBadge(p.status)}</td><td>${garansiCell(p)}</td><td>${esc(p.pic)}</td>
-    <td><div class="photos">${p.fotoIn.map(u=>`<div class="phitem"><img src="${u}" onclick="zoom('${u}')"><small>BEFORE</small><button class="phdel" onclick="delPhoto('${p.id}','in','${u}')">✕</button></div>`).join('')}${p.fotoOut.map(u=>`<div class="phitem after"><img src="${u}" onclick="zoom('${u}')"><small>AFTER</small><button class="phdel" onclick="delPhoto('${p.id}','out','${u}')">✕</button></div>`).join('')}</div>
-    <div class="rowbtns"><button class="btn blue sm" onclick="uploadPhoto('${p.id}','in')">📷 Upload Masuk</button><button class="btn green sm" onclick="uploadPhoto('${p.id}','out')">📷 Upload Closing</button></div></td>
-    <td><div class="rowbtns" style="flex-direction:column"><button class="btn blue sm" onclick="editProj('${p.id}')">✏️</button><button class="btn green sm" onclick="goWA('${p.id}')">💬</button><button class="btn purple sm" onclick="dl('/api/pdf/project/${p.id}')">📄</button><button class="btn red sm" onclick="delProj('${p.id}')">🗑️</button></div></td></tr>`).join('')||`<tr><td colspan="11" class="empty">Belum ada proyek</td></tr>`;
+  const html = PROJECTS.map(p=>{
+    const pct=progressPct(p);
+    const steps=['Baru Masuk','Sedang Dikerjakan','Menunggu Pembayaran','Selesai / Closing'];
+    const idx=steps.indexOf(p.status);
+    const fotos=[...p.fotoIn.map(u=>`<div class="phitem"><img src="${u}" onclick="zoom('${u}')"><small>BEFORE</small><button class="phdel" onclick="delPhoto('${p.id}','in','${u}')">✕</button></div>`),
+                 ...p.fotoOut.map(u=>`<div class="phitem after"><img src="${u}" onclick="zoom('${u}')"><small>AFTER</small><button class="phdel" onclick="delPhoto('${p.id}','out','${u}')">✕</button></div>`)].join('');
+    return `<div class="projcard">
+      <div class="pc-head">
+        <div><b class="pc-id">${p.id}</b><small class="pc-tgl">📅 ${p.tgl}</small></div>
+        <h3 class="pc-nama"><a href="#" onclick="detail('${p.id}');return false">${esc(p.nama)}</a></h3>
+        <div class="pc-badges">${statusBadge(p.status)} ${bayarBadge(p.bayar)}</div>
+      </div>
+      <div class="pc-progress">
+        <div class="pc-bar"><div style="width:${pct}%"></div></div>
+        <div class="pc-steps">${steps.map((st,i)=>`<span class="${i<=idx?'done':''}">${i<=idx?'●':'○'} ${st}</span>`).join('')}</div>
+      </div>
+      <div class="pc-grid">
+        <div><small>Layanan</small><b>${esc(p.layanan)}</b></div>
+        <div><small>PIC</small><b>${esc(p.pic)}</b></div>
+        <div><small>Klien</small><b>${esc(p.klien)}</b><small>${esc(p.wa)}</small></div>
+        <div><small>Biaya</small><b>${rupiah(p.biaya)}</b></div>
+        <div><small>Garansi</small><b>${garansiCell(p)}</b></div>
+      </div>
+      ${fotos?`<div class="pc-fotos"><div class="photos">${fotos}</div></div>`:''}
+      <div class="pc-fotos pc-upload">
+        <button class="btn blue sm" onclick="uploadPhoto('${p.id}','in')">📷 Upload Masuk</button>
+        <button class="btn green sm" onclick="uploadPhoto('${p.id}','out')">📷 Upload Closing</button>
+      </div>
+      <div class="pc-actions">
+        <button class="btn blue sm" onclick="editProj('${p.id}')">✏️ Edit</button>
+        <button class="btn green sm" onclick="goWA('${p.id}')">💬 WA</button>
+        <button class="btn purple sm" onclick="dl('/api/pdf/project/${p.id}')">📄 PDF</button>
+        <button class="btn red sm" onclick="delProj('${p.id}')">🗑️ Hapus</button>
+      </div>
+    </div>`;
+  }).join('')||`<div class="panel empty">Belum ada proyek</div>`;
+  $('#tProj').innerHTML=html;
 }
+
 function goWA(id){document.querySelector('[data-p="wa"]').click();waProj.value=id;renderWATexts();}
 
 $('#frmTrx').onsubmit=async e=>{e.preventDefault();

@@ -411,6 +411,51 @@ app.get('/api/pdf/projects', (req, res) => {
       doc.font('Helvetica').fontSize(8.5).fillColor(C.ink).text(String(v), 200, doc.y - 11, { width: 345 });
       doc.moveDown(0.25);
     });
+    // foto before/after per proyek
+    const drawMini = (arr, label, soft) => {
+      (arr || []).forEach((u, i) => {
+        if (doc.y + 105 > 760) { doc.addPage(); doc.y = 70; }
+        const fy = doc.y;
+        const fw = 120, fh = 82;
+        doc.roundedRect(56, fy, fw, fh, 6).fill(soft);
+        try { doc.image(path.join(__dirname, u), 56, fy, { fit: [fw, fh] }); } catch (e) {}
+        doc.font('Helvetica').fontSize(7.5).fillColor('#666').text(`${label} #${i + 1}`, 56, fy + fh + 3, { width: fw, align: 'center' });
+        doc.y = fy + fh + 18;
+      });
+    };
+    const anyFoto = (p.fotoIn || []).length || (p.fotoOut || []).length;
+    if (anyFoto) {
+      if (doc.y > 560) { doc.addPage(); doc.y = 70; }
+      doc.moveDown(0.2);
+      const twoCol = (p.fotoIn || []).length && (p.fotoOut || []).length;
+      let fx = 56;
+      const drawSide = (arr, label, soft, x) => (arr || []).slice(0, 2).forEach((u, i) => {
+        const fy = doc.y;
+        const fw = 120, fh = 82;
+        doc.roundedRect(x, fy, fw, fh, 6).fill(soft);
+        try { doc.image(path.join(__dirname, u), x, fy, { fit: [fw, fh] }); } catch (e) {}
+        doc.font('Helvetica').fontSize(7.5).fillColor('#666').text(`${label} #${i + 1}`, x, fy + fh + 3, { width: fw, align: 'center' });
+      });
+      if (twoCol) {
+        const maxY = doc.y;
+        drawSide(p.fotoIn, 'Before', C.blueSoft, 56);
+        drawSide(p.fotoOut, 'After', C.pinkSoft, 200);
+        doc.y = maxY + 105;
+      } else {
+        drawMini(p.fotoIn.length ? p.fotoIn : p.fotoOut, p.fotoIn.length ? 'Before' : 'After', p.fotoIn.length ? C.blueSoft : C.pinkSoft);
+      }
+    }
+    // tanda tangan digital
+    if (p.signature && p.signature.startsWith('data:image')) {
+      try {
+        if (doc.y + 90 > 760) { doc.addPage(); doc.y = 70; }
+        const b64 = p.signature.split(',')[1];
+        const sy = doc.y;
+        doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#7a4b8f').text('Tanda Tangan:', 56, sy);
+        doc.image(Buffer.from(b64, 'base64'), 200, sy - 4, { fit: [140, 60] });
+        doc.y = sy + 66;
+      } catch (e) {}
+    }
     doc.moveDown(0.5);
   });
   footerNote(doc); doc.end();
@@ -659,6 +704,44 @@ app.post('/api/qris/image', (req, res) => {
   meta.oleh = req.query.actor;
   fs.writeFileSync(QRIS_META, JSON.stringify(meta, null, 2));
   res.json({ ok: true });
+});
+
+
+/* ================= META PEMBAYARAN (ewallet/bank/va) + LOKASI — editable superadmin/admin ================= */
+const PAYMETA_FILE = path.join(__dirname, 'data', 'paymeta.json');
+const DEF_PAYMETA = {
+  ewallet: [
+    { nama: 'GoPay', nomor: '0851-6585-9837' }, { nama: 'OVO', nomor: '0851-6585-9837' },
+    { nama: 'DANA', nomor: '0851-6585-9837' }, { nama: 'ShopeePay', nomor: '0851-6585-9837' }
+  ],
+  bank: [
+    { nama: 'BCA', nomor: '1234567890' }, { nama: 'BRI', nomor: '098765432112345' },
+    { nama: 'Mandiri', nomor: '1122334455' }, { nama: 'BNI', nomor: '0551234567' }
+  ],
+  va: [
+    { nama: 'VA BCA', nomor: '8808 5165 8598 37' }, { nama: 'VA BRI', nomor: '8810 8516 5859 837' },
+    { nama: 'VA Mandiri', nomor: '8950 8516 5859 837' }, { nama: 'VA BNI', nomor: '9881 8516 5859 837' }
+  ],
+  an: 'Kudostack Official',
+  lokasi: { alamat: '', lat: null, lng: null, catatan: '' }
+};
+function getPayMeta() {
+  if (!fs.existsSync(PAYMETA_FILE)) return DEF_PAYMETA;
+  try { const d = JSON.parse(fs.readFileSync(PAYMETA_FILE, 'utf8')); return { ...DEF_PAYMETA, ...d }; }
+  catch (e) { return DEF_PAYMETA; }
+}
+app.get('/api/paymeta', (req, res) => res.json(getPayMeta()));
+app.put('/api/paymeta', (req, res) => {
+  const u = getUsers().find(x => x.username === req.query.actor);
+  if (!u || !['superadmin', 'admin'].includes(u.role))
+    return res.status(403).json({ error: 'Hanya superadmin/admin' });
+  const meta = getPayMeta();
+  const b = req.body || {};
+  ['ewallet', 'bank', 'va'].forEach(k => { if (Array.isArray(b[k])) meta[k] = b[k]; });
+  if (b.an !== undefined) meta.an = b.an;
+  if (b.lokasi && typeof b.lokasi === 'object') meta.lokasi = { ...meta.lokasi, ...b.lokasi };
+  fs.writeFileSync(PAYMETA_FILE, JSON.stringify(meta, null, 2));
+  res.json({ ok: true, meta });
 });
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Endpoint tidak ditemukan' }));

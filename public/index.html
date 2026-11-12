@@ -191,6 +191,8 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
 .pc-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;border-top:2px dashed #eee;padding-top:10px}
 @media(max-width:640px){.pc-badges{margin-left:0}.projcard{padding:12px}}
 
+.lokmap{width:100%;height:260px;border:var(--brd);border-radius:12px;margin-top:10px;display:block}
+@media(max-width:640px){.lokmap{height:200px}}
 </style>
 </head>
 <body>
@@ -401,6 +403,7 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
       <button class="paytab" data-pay="ewallet">📱 E-Wallet</button>
       <button class="paytab" data-pay="bank">🏦 Bank</button>
       <button class="paytab" data-pay="va">🏧 Virtual Account</button>
+      <button class="paytab" data-pay="lokasi">📍 Lokasi</button>
     </div>
     <div id="payBody"></div>
     <h3 style="margin-top:18px">📍 Lokasi Kudostack</h3>
@@ -767,33 +770,32 @@ async function sendWA(i){const p=PROJECTS.find(x=>x.id===waProj.value);
   if(r.ok)toast('✅ Masuk antrean kirim server!');else toast('⚠️ Gagal — pakai fallback wa.me');}
 
 /* PEMBAYARAN CUSTOMER */
-const PAY={
-  qris:`<div class="qrisbox" id="qrisBox"><i style="color:#999">Memuat QRIS…</i></div>`,
-  ewallet:`<div class="payinfo">
-      <b class="nm">📱 E-Wallet</b>
-      <div class="payrow"><span>GoPay</span><b>0851-6585-9837</b></div>
-      <div class="payrow"><span>OVO</span><b>0851-6585-9837</b></div>
-      <div class="payrow"><span>DANA</span><b>0851-6585-9837</b></div>
-      <div class="payrow"><span>ShopeePay</span><b>0851-6585-9837</b></div>
-      <small style="color:#888">a.n. Kudostack Official — konfirmasi ke WA admin setelah transfer ya! 💬</small>
-    </div>`,
-  bank:`<div class="payinfo">
-      <b class="nm">🏦 Transfer Bank</b>
-      <div class="payrow"><span>BCA</span><b>1234567890</b></div>
-      <div class="payrow"><span>BRI</span><b>098765432112345</b></div>
-      <div class="payrow"><span>Mandiri</span><b>1122334455</b></div>
-      <div class="payrow"><span>BNI</span><b>0551234567</b></div>
-      <small style="color:#888">a.n. Kudostack Official — sesuaikan nomor rekening asli di index.html</small>
-    </div>`,
-  va:`<div class="payinfo">
-      <b class="nm">🏧 Virtual Account</b>
-      <div class="payrow"><span>VA BCA</span><b>8808 5165 8598 37</b></div>
-      <div class="payrow"><span>VA BRI</span><b>8810 8516 5859 837</b></div>
-      <div class="payrow"><span>VA Mandiri</span><b>8950 8516 5859 837</b></div>
-      <div class="payrow"><span>VA BNI</span><b>9881 8516 5859 837</b></div>
-      <small style="color:#888">Nomor VA terverifikasi bank — slip otomatis masuk ke rekening a.n. Kudostack</small>
-    </div>`
-};
+let PAYMETA=null;
+async function loadPayMeta(){PAYMETA=await fetch('/api/paymeta').then(r=>r.json()).catch(()=>null);}
+function payRows(list,note){
+  return `<div class="payinfo">
+    <b class="nm">${note}</b>
+    ${(list||[]).map(x=>`<div class="payrow"><span>${esc(x.nama)}</span><b>${esc(x.nomor)}</b></div>`).join('')}
+    <small style="color:#888">a.n. ${esc(PAYMETA.an||'Kudostack Official')} — konfirmasi ke WA admin setelah transfer ya! 💬</small>
+  </div>`;
+}
+function lokasiHtml(){
+  const L=PAYMETA.lokasi||{};
+  if(!L.lat||!L.lng)return `<div class="payinfo"><b class="nm">📍 Lokasi Kudostack</b><small style="color:#888">Lokasi belum diatur admin.</small></div>`;
+  const d=L.alamat?`<div class="payrow"><span>Alamat</span><b>${esc(L.alamat)}</b></div>`:'';
+  const c=L.catatan?`<small style="color:#888">${esc(L.catatan)}</small>`:'';
+  return `<div class="payinfo">
+    <b class="nm">📍 Lokasi Kudostack</b>
+    ${d}
+    <iframe class="lokmap" loading="lazy" src="https://www.openstreetmap.org/export/embed.html?bbox=${L.lng-0.008},${L.lat-0.006},${L.lng+0.008},${L.lat+0.006}&layer=mapnik&marker=${L.lat},${L.lng}"></iframe>
+    ${c}
+    <div class="flex" style="gap:8px;margin-top:8px;flex-wrap:wrap">
+      <a class="btn green sm" style="text-decoration:none" target="_blank" href="https://www.google.com/maps/dir/?api=1&destination=${L.lat},${L.lng}">🧭 Rute ke Sini (estimasi perjalanan)</a>
+      <a class="btn blue sm" style="text-decoration:none" target="_blank" href="https://www.openstreetmap.org/?mlat=${L.lat}&mlon=${L.lng}#map=17/${L.lat}/${L.lng}">🗺️ Buka Peta</a>
+    </div>
+    <small style="color:#888">Klik "Rute ke Sini" — Google Maps otomatis hitung estimasi waktu dari lokasimu (motor/mobil/transportasi umum).</small>
+  </div>`;
+}
 async function renderPay(tab){
   document.querySelectorAll('.paytab').forEach(b=>b.classList.toggle('on',b.dataset.pay===tab));
   const el=document.getElementById('payBody');if(!el)return;
@@ -827,7 +829,66 @@ async function renderPay(tab){
         </div>
         <small style="color:#888;display:block;margin-top:6px">Gambar QR baru langsung tampil untuk semua user (customer juga).</small>
       </div>`:''}`;
+  } else if(tab==='ewallet'||tab==='bank'||tab==='va'){
+    if(!PAYMETA)await loadPayMeta();
+    const lbl={ewallet:'📱 E-Wallet',bank:'🏦 Transfer Bank',va:'🏧 Virtual Account'}[tab];
+    el.innerHTML=payRows(PAYMETA?.[tab],lbl)+(
+      ME&&['superadmin','admin'].includes(ME.role)?editPaymetaHtml(tab):'');
+    const eb=document.getElementById('eb_'+tab);
+    if(eb)eb.onclick=()=>savePaymeta(tab);
+  } else if(tab==='lokasi'){
+    if(!PAYMETA)await loadPayMeta();
+    el.innerHTML=lokasiHtml()+(ME&&['superadmin','admin'].includes(ME.role)?editLokasiHtml():'');
+    const lb=document.getElementById('lokSave');
+    if(lb)lb.onclick=saveLokasi;
+    const pk=document.getElementById('lokPick');
+    if(pk)pk.onclick=()=>navigator.geolocation.getCurrentPosition(pos=>{
+      lk_lat.value=pos.coords.latitude.toFixed(6);lk_lng.value=pos.coords.longitude.toFixed(6);
+      toast('Koordinat GPS terisi ✓ — cek lagi sebelum simpan');
+    },()=>toast('GPS tidak bisa diakses — isi manual dari Google Maps'));
   } else el.innerHTML=PAY[tab]||'';
+}
+function editPaymetaHtml(tab){
+  const list=PAYMETA[tab]||[];
+  return `<div class="panel" style="margin-top:14px">
+    <h3>🔑 Edit ${ {ewallet:'E-Wallet',bank:'Rekening Bank',va:'Virtual Account'}[tab] } (superadmin/admin)</h3>
+    <small style="color:#888;display:block;margin-bottom:8px">a.n. <input id="pm_an" value="${esc(PAYMETA.an||'')}" style="max-width:220px"></small>
+    ${list.map((x,i)=>`<div class="flex" style="gap:6px;margin-bottom:6px;flex-wrap:wrap">
+      <input id="pm_${tab}_n${i}" value="${esc(x.nama)}" placeholder="Nama" style="max-width:150px">
+      <input id="pm_${tab}_r${i}" value="${esc(x.nomor)}" placeholder="Nomor" style="max-width:220px">
+    </div>`).join('')}
+    <button class="btn blue" id="eb_${tab}">💾 Simpan</button>
+  </div>`;
+}
+async function savePaymeta(tab){
+  const list=(PAYMETA[tab]||[]).map((x,i)=>({nama:document.getElementById(`pm_${tab}_n${i}`).value,nomor:document.getElementById(`pm_${tab}_r${i}`).value}));
+  const body={[tab]:list,an:document.getElementById('pm_an').value};
+  const r=await fetch('/api/paymeta?actor='+ME.username,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){toast('Tersimpan ✓');await loadPayMeta();renderPay(tab);}else toast('Gagal simpan');
+}
+function editLokasiHtml(){
+  const L=PAYMETA.lokasi||{};
+  return `<div class="panel" style="margin-top:14px">
+    <h3>🔑 Atur Lokasi Kudostack (superadmin/admin)</h3>
+    <div class="frm2">
+      <div><label>Alamat Lengkap</label><input id="lk_alamat" value="${esc(L.alamat||'')}" placeholder="cth: Jl. Kebumen No. 10, Kebumen"></div>
+      <div><label>Latitude</label><input id="lk_lat" value="${L.lat??''}" placeholder="-7.67"></div>
+      <div><label>Longitude</label><input id="lk_lng" value="${L.lng??''}" placeholder="109.65"></div>
+    </div>
+    <div><label style="display:block;margin-top:8px">Catatan untuk customer</label><input id="lk_cat" value="${esc(L.catatan||'')}" placeholder="cth: sebelah toko X, patok patung ayam" style="width:100%"></div>
+    <div class="flex" style="gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn blue" id="lokSave">💾 Simpan Lokasi</button>
+      <button class="btn purple sm" id="lokPick">📌 Ambil dari GPS/Halaman Peta</button>
+      <small id="lkHint" style="color:#888;width:100%">Tips: buka google.com/maps → klik-kanan lokasi tepat → salin angka latitude, longitude.</small>
+    </div>
+  </div>`;
+}
+async function saveLokasi(){
+  const lat=parseFloat(lk_lat.value),lng=parseFloat(lk_lng.value);
+  if(isNaN(lat)||isNaN(lng)){toast('Latitude/longitude harus angka (cth: -7.67 / 109.65)');return;}
+  const body={lokasi:{alamat:lk_alamat.value,lat,lng,catatan:lk_cat.value}};
+  const r=await fetch('/api/paymeta?actor='+ME.username,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.ok){toast('Lokasi tersimpan ✓');await loadPayMeta();renderPay('lokasi');}else toast('Gagal simpan');
 }
 async function saveQrisMeta(){
   const r=await fetch('/api/qris?actor='+ME.username,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nama:qr_nama.value,nmid:qr_nmid.value,tipe:qr_tipe.value})});

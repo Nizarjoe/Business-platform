@@ -7,6 +7,10 @@ const DATA_DIR = process.env.DATA_DIR
 const UPLOADS_DIR = process.env.UPLOADS_DIR
   ? path.resolve(process.env.UPLOADS_DIR)
   : path.join(__dirname, 'uploads');
+// Local-only dirs: never touched when Supabase is configured (remote mode
+// uses Storage for photos and no local files at all). All local mkdir/write
+// calls are lazy so a read-only filesystem (e.g. Cloudvea/Render containers)
+// cannot crash the boot sequence.
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const ADMIN_WA = '+62 851-6585-9837';
 const DOC_MAIN = 'main';

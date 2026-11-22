@@ -11,7 +11,10 @@ const {
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+// Local mode only: created lazily on first disk write. In remote (Supabase)
+// mode photos go to Storage, so a read-only FS must not crash startup.
+const ensureUploadsDir = () => { try { fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (e) { console.error('uploads dir:', e.message); } };
+if (!usingRemote()) ensureUploadsDir();
 const QRIS_IMG = process.env.QRIS_FILE
   ? path.resolve(process.env.QRIS_FILE)
   : path.join(__dirname, 'public', 'qris.jpg');

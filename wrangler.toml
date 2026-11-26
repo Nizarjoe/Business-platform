@@ -6,9 +6,9 @@ compatibility_flags = ["nodejs_compat", "enable_nodejs_http_modules", "enable_no
 [[d1_databases]]
 binding = "DB"
 database_name = "business-platform"
-database_id = "TO_BE_FILLED"
+database_id = "2d6559b2-7870-4a81-bb76-a69e93d54c63"
 migrations_dir = "migrations"
 
 [[kv_namespaces]]
 binding = "FILES"
-id = "TO_BE_FILLED"
+id = "b1d129c3f7b24334975bc79071576193"

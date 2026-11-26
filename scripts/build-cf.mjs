@@ -14,7 +14,7 @@ fs.writeFileSync('cf/assets.generated.mjs', 'export default ' + JSON.stringify(a
 
 fs.rmSync('cf-dist', { recursive: true, force: true });
 fs.rmSync('cf/.bundle', { recursive: true, force: true });
-execFileSync('npx', ['wrangler', 'deploy', '--dry-run', '--config', 'cf/wrangler.bundle.toml', '--outdir', '.bundle'], { stdio: 'inherit' });
+execFileSync('npx', ['wrangler', 'deploy', '--dry-run', '--config', 'cf/wrangler.bundle.toml', '--outdir', '.bundle', '--minify'], { stdio: 'inherit' });
 const out = fs.readdirSync('cf/.bundle').filter(n => n.endsWith('.js'));
 if (out.length !== 1 || !out[0].endsWith('.js')) throw new Error('expected one bundled module, got ' + out.join(','));
 fs.mkdirSync('cf-dist');

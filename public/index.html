@@ -840,8 +840,8 @@ async function openPay(id){let p=PROJECTS.find(x=>x.id===id);if(!p){await refres
   <div class="flex" style="margin-top:10px"><button class="btn blue" id="py_save" onclick="savePay('${p.id}')">Catat pembayaran</button></div>`;
   py_tgl.value=new Date().toISOString().slice(0,10);$('#modal').classList.add('on');}
 async function savePay(id){const r=await fetch(`/api/projects/${id}/payments`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jenis:py_jenis.value,nominal:py_nom.value,tgl:py_tgl.value,ket:py_ket.value})});
-  if(!r.ok){toast(await errOf(r));return;}const d=await r.json();toast(d.pay.no+' tercatat — '+d.bayar);await refresh();renderProj();openPay(id);}
-function delPay(id,pid){askConfirm('Hapus pembayaran ini? Transaksi Kas-nya ikut terhapus.','',async ok=>{if(!ok)return;const r=await fetch(`/api/projects/${id}/payments/${pid}`,{method:'DELETE'});if(!r.ok){toast(await errOf(r));return;}await refresh();renderProj();openPay(id);});}
+  if(!r.ok){toast(await errOf(r));return;}const d=await r.json();toast(d.pay.no+' tercatat — '+d.bayar);await refresh();renderProj();if($('#modal').classList.contains('on'))await openPay(id);}
+function delPay(id,pid){askConfirm('Hapus pembayaran ini? Transaksi Kas-nya ikut terhapus.','',async ok=>{if(!ok)return;const r=await fetch(`/api/projects/${id}/payments/${pid}`,{method:'DELETE'});if(!r.ok){toast(await errOf(r));return;}await refresh();renderProj();if($('#modal').classList.contains('on'))await openPay(id);});}
 /* F14: attachments */
 async function openFiles(id){let p=PROJECTS.find(x=>x.id===id);if(!p){await refresh();p=PROJECTS.find(x=>x.id===id);}if(!p)return;const l=p.lampiran||[];
   $('#modalBox').innerHTML=`<h3>Lampiran ${esc(p.id)} — ${esc(p.nama)}</h3>
@@ -851,8 +851,8 @@ async function openFiles(id){let p=PROJECTS.find(x=>x.id===id);if(!p){await refr
   $('#modal').classList.add('on');}
 async function upFile(id){const f=fl_in.files[0];if(!f){toast('Pilih file dulu');return;}if(f.size>10*1024*1024){toast('Maksimal 10 MB');return;}
   const fd=new FormData();fd.append('file',f);const r=await fetch(`/api/projects/${id}/files`,{method:'POST',body:fd});
-  if(!r.ok){toast(await errOf(r));return;}toast('Lampiran tersimpan');await refresh();renderProj();openFiles(id);}
-function delFile(id,fid){askConfirm('Hapus lampiran ini?','',async ok=>{if(!ok)return;await fetch(`/api/projects/${id}/files/${fid}`,{method:'DELETE'});await refresh();renderProj();openFiles(id);});}
+  if(!r.ok){toast(await errOf(r));return;}toast('Lampiran tersimpan');await refresh();renderProj();if($('#modal').classList.contains('on'))await openFiles(id);}
+function delFile(id,fid){askConfirm('Hapus lampiran ini?','',async ok=>{if(!ok)return;await fetch(`/api/projects/${id}/files/${fid}`,{method:'DELETE'});await refresh();renderProj();if($('#modal').classList.contains('on'))await openFiles(id);});}
 /* F9: reminders on the dashboard (nothing is sent) */
 const REM_LBL={garansi:'Garansi',tagihan:'Tagihan',konten:'Konten',persetujuan:'Persetujuan'};
 async function renderReminders(){const el=$('#remPanel');const r=await fetch('/api/reminders');if(!r.ok){el.style.display='none';return;}const l=await r.json();el.style.display='block';

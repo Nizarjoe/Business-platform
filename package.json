@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "migrate:supabase": "node scripts/migrate-to-supabase.js",
-    "test": "node --test test/app.test.js"
+    "test": "node --test test/app.test.js",
+    "build": "node scripts/build-cf.mjs"
   },
   "engines": {
     "node": "22.x"

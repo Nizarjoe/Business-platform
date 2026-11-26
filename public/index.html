@@ -200,9 +200,12 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
 <div id="login">
   <div class="box">
     <div class="logo"><img src="/logo.jpg" style="max-width:220px;height:auto;border:var(--brd);border-radius:12px;margin-bottom:10px"><br>⚡ <span>Admin Hub</span></div>
-    <p>Login cepat — cukup username, tanpa password 🔓</p>
-    <input id="li_user" placeholder="Username…" autocomplete="off">
-    <button onclick="doLogin()">MASUK ➜</button>
+    <p>Masuk dengan username dan password akun Anda.</p>
+    <form id="li_form" onsubmit="event.preventDefault();doLogin();">
+    <input id="li_user" name="username" placeholder="Username…" autocomplete="username" autocapitalize="none" required>
+    <input id="li_pass" name="password" type="password" placeholder="Password…" autocomplete="current-password" required style="margin-top:10px">
+    <button type="submit">MASUK ➜</button>
+    </form>
     <div class="err" id="li_err"></div>
     <div class="welcome">
       <p class="w-title">Selamat Datang di Kudostack 💖</p>
@@ -219,7 +222,7 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
   <div class="wa-admin">📞 Admin: <b>+62 851-6585-9837</b></div>
   <a class="socbtn" style="width:34px;height:34px" href="https://www.instagram.com/kudo_stack" target="_blank" title="@kudo_stack di Instagram" onclick="event.stopPropagation()"><svg width="18" height="18" viewBox="0 0 24 24" fill="#fff"><path d="M12 2.2c3.2 0 3.6 0 4.8.07 3.25.15 4.77 1.7 4.92 4.92.06 1.27.07 1.65.07 4.81s-.01 3.54-.07 4.81c-.15 3.22-1.66 4.77-4.92 4.92-1.2.06-1.6.07-4.8.07s-3.6-.01-4.8-.07c-3.26-.15-4.77-1.7-4.92-4.92C2.2 15.54 2.2 15.16 2.2 12s0-3.54.08-4.81C2.42 3.97 3.94 2.42 7.2 2.27 8.4 2.21 8.8 2.2 12 2.2zm0 3.68a6.12 6.12 0 100 12.24 6.12 6.12 0 000-12.24zm0 2.2a3.92 3.92 0 110 7.84 3.92 3.92 0 010-7.84zm6.36-2.6a1.43 1.43 0 100 2.86 1.43 1.43 0 000-2.86z"/></svg></a>
   <a class="socbtn" style="width:34px;height:34px;background:#111" href="https://www.tiktok.com/@kudo_stack" target="_blank" title="@kudo_stack di TikTok" onclick="event.stopPropagation()"><svg width="16" height="16" viewBox="0 0 24 24" fill="#fff"><path d="M19.6 6.7a5.6 5.6 0 01-3.4-3.5c-.1-.4-.2-.8-.2-1.2h-3.7v13.7a2.9 2.9 0 11-2.9-2.9c.3 0 .6 0 .9.1V9.2a6.6 6.6 0 00-.9-.06 6.66 6.66 0 106.66 6.66V9.4a9.2 9.2 0 004.5 1.16V6.8c-.3 0-.66-.03-.96-.1z"/></svg></a>
-  <div class="userchip">👤 <b id="uName">-</b> · <span id="uRole">-</span> · <b onclick="logout()" style="color:#ffd6d6">Keluar ✕</b></div>
+  <div class="userchip">👤 <b id="uName">-</b> · <span id="uRole">-</span> · <b onclick="openPwd()" style="cursor:pointer">Ganti password</b> · <b onclick="logout()" style="color:#ffd6d6">Keluar ✕</b></div>
 </div></header>
 
 <div class="layout">
@@ -475,6 +478,20 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
     </div>
   </div>
 </div>
+<div id="pwdBox" style="position:fixed;inset:0;background:rgba(17,17,17,.6);display:none;align-items:center;justify-content:center;z-index:300;padding:16px">
+  <form id="pwdForm" onsubmit="event.preventDefault();savePwd();" style="background:#fff;border:var(--brd);border-radius:16px;max-width:380px;width:100%;padding:24px;box-shadow:10px 10px 0 #111">
+    <h3 id="pwdTitle" style="margin:0 0 14px;font-size:1rem">Ganti password</h3>
+    <input type="text" name="username" id="pwdUser" autocomplete="username" style="display:none">
+    <div id="pwdCurWrap"><label>Password lama</label><input id="pwdCur" type="password" autocomplete="current-password"></div>
+    <label>Password baru (min. 10 karakter)</label><input id="pwdNew" type="password" autocomplete="new-password" minlength="10" required>
+    <label>Ulangi password baru</label><input id="pwdNew2" type="password" autocomplete="new-password" minlength="10" required>
+    <div class="err" id="pwdErr" style="color:#b91c1c;font-size:.8rem;font-weight:700;margin-top:8px"></div>
+    <div class="flex" style="justify-content:flex-end;gap:10px;margin-top:14px">
+      <button type="button" class="btn" onclick="closePwd()">Batal</button>
+      <button type="submit" class="btn green">Simpan</button>
+    </div>
+  </form>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -483,6 +500,22 @@ let PROJECTS=[],TRX=[],STATS=null,ME=null;
 const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
 const rupiah=n=>'Rp '+Number(n||0).toLocaleString('id-ID');
 const esc=s=>String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Session cookie is HttpOnly; a 401 from the API means it expired or was revoked.
+const _fetch=window.fetch.bind(window);
+window.fetch=async(u,o)=>{const r=await _fetch(u,o);if(r.status===401&&ME&&typeof u==='string'&&u.startsWith('/api/')&&u!=='/api/login'){ME=null;toast('Sesi berakhir, silakan login lagi');setTimeout(()=>location.reload(),1200);}return r;};
+const can={fin:r=>['superadmin','admin'].includes(r),staff:r=>r!=='customer',payEdit:r=>r==='superadmin',bayar:r=>r==='superadmin'};
+let PWD_TARGET=null;
+function openPwd(user){PWD_TARGET=user||null;$('#pwdTitle').textContent=user?'Atur password untuk '+user:'Ganti password';$('#pwdUser').value=user||ME.username;$('#pwdCurWrap').style.display=user?'none':'block';['#pwdCur','#pwdNew','#pwdNew2'].forEach(k=>$(k).value='');$('#pwdErr').textContent='';$('#pwdBox').style.display='flex';}
+function closePwd(){$('#pwdBox').style.display='none';['#pwdCur','#pwdNew','#pwdNew2'].forEach(k=>$(k).value='');}
+async function savePwd(){
+  const n=$('#pwdNew').value;if(n!==$('#pwdNew2').value){$('#pwdErr').textContent='Password baru tidak sama';return;}
+  const r=PWD_TARGET
+    ?await fetch('/api/users/'+encodeURIComponent(PWD_TARGET)+'/password',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:n})})
+    :await fetch('/api/me/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current:$('#pwdCur').value,next:n})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){$('#pwdErr').textContent=d.error||'Gagal menyimpan';return;}
+  closePwd();toast(PWD_TARGET?'Password '+PWD_TARGET+' disimpan':'Password diganti');if(PWD_TARGET)renderUsers();
+}
 function askConfirm(msg,icon,cb){
   const box=document.getElementById('confirmBox');
   document.getElementById('cfIcon').textContent=icon||'⚠️';
@@ -496,14 +529,15 @@ function askConfirm(msg,icon,cb){
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('on');setTimeout(()=>t.classList.remove('on'),2600);}
 function dl(u){window.open(u,'_blank');}
 
-$('#li_user').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 async function doLogin(){
-  const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('#li_user').value.trim()})});
-  const d=await r.json();
-  if(!d.ok){const e=$('#li_err');e.textContent=d.error;e.style.display='block';return;}
-  ME=d;sessionStorage.setItem('kds_user',JSON.stringify(d));startApp();
+  const e=$('#li_err');e.style.display='none';
+  const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('#li_user').value.trim(),password:$('#li_pass').value})});
+  const d=await r.json().catch(()=>({error:'Gagal login'}));
+  $('#li_pass').value='';
+  if(!r.ok||!d.ok){e.textContent=d.error||'Gagal login';e.style.display='block';return;}
+  ME={username:d.username,role:d.role};startApp();
 }
-function logout(){sessionStorage.removeItem('kds_user');location.reload();}
+async function logout(){await fetch('/api/logout',{method:'POST'}).catch(()=>{});ME=null;location.reload();}
 function startApp(){
   $('#login').style.display='none';$('#app').style.display='block';
   $('#uName').textContent=ME.username;
@@ -517,7 +551,8 @@ function startApp(){
   $('#navPlanner').style.display=['superadmin','admin','medsos'].includes(r)?'flex':'none';
   $('#navSosmed').style.display=isCust||['superadmin','admin','medsos'].includes(r)?'flex':'none';
   $('#navPdf').style.display=['superadmin','admin'].includes(r)?'flex':'none';
-  $('#navKas').style.display=isCust?'none':'flex';
+  $('#navKas').style.display=can.fin(r)?'flex':'none';
+  $('#f_bayar').disabled=!can.bayar(r);$('#f_bayar').title=can.bayar(r)?'':'Status bayar hanya bisa diubah superadmin';
   $('#navProj').style.display=isCust?'none':'flex';
   $('#custInfo').style.display='block';
   $('#smPanel').style.display=['superadmin','admin','medsos'].includes(r)?'block':'none';
@@ -536,8 +571,9 @@ $$('nav button').forEach(b=>b.onclick=()=>{
 });
 
 async function refresh(){
-  const[p,t,s]=await Promise.all([fetch('/api/projects').then(r=>r.json()),fetch('/api/transactions').then(r=>r.json()),fetch('/api/stats').then(r=>r.json())]);
-  PROJECTS=p;TRX=t;STATS=s;
+  const r=ME.role,ok=x=>x.ok?x.json():null;
+  const[p,t,s]=await Promise.all([fetch('/api/projects').then(ok),can.fin(r)?fetch('/api/transactions').then(ok):null,can.staff(r)?fetch('/api/stats').then(ok):null]);
+  PROJECTS=Array.isArray(p)?p:[];TRX=Array.isArray(t)?t:[];STATS=s;
 }
 const statusBadge=s=>{const m={'Baru Masuk':'b-blue','Sedang Dikerjakan':'b-amber','Menunggu Pembayaran':'b-purple','Selesai / Closing':'b-green','Komplain / Kendala':'b-red'};return `<span class="badge ${m[s]||'b-gray'}">${esc(s)}</span>`;};
 const bayarBadge=b=>{const m={'Lunas':'b-green','DP':'b-amber','Belum Bayar':'b-red'};return `<span class="badge ${m[b]||'b-gray'}">${esc(b)}</span>`;};
@@ -587,6 +623,8 @@ async function renderHome(){
     return;
   }
   const s=STATS;
+  if(!s)return;
+  const cp=document.getElementById('chartPanel');if(cp)cp.style.display=s.finance?'':'none';
   $('#statCards').innerHTML=`
     <div class="card c-b"><small>Proyek Aktif</small><b>${s.aktif}</b></div>
     <div class="card c-y"><small>Menunggu Bayar</small><b>${s.tungguBayar}</b></div>
@@ -594,7 +632,7 @@ async function renderHome(){
     <div class="card c-r"><small>Komplain</small><b>${s.komplain}</b></div>
     <div class="card c-p"><small>Omzet (Lunas)</small><b>${rupiah(s.omzet)}</b></div>
     <div class="card c-r"><small>Piutang</small><b>${rupiah(s.piutang)}</b></div>
-    <div class="card c-g"><small>Saldo Kas</small><b>${rupiah(s.saldo)}</b></div>`;
+    ${s.finance?`<div class="card c-g"><small>Saldo Kas</small><b>${rupiah(s.saldo)}</b></div>`:''}`;
   // pembagian omzet 50/30/20
   const o=s.omzet;
   $('#bagiCards').innerHTML=`
@@ -800,9 +838,8 @@ async function renderPay(tab){
   document.querySelectorAll('.paytab').forEach(b=>b.classList.toggle('on',b.dataset.pay===tab));
   const el=document.getElementById('payBody');if(!el)return;
   if(tab==='qris'){
-    el.innerHTML=PAY.qris;
     const meta=await fetch('/api/qris').then(r=>r.json()).catch(()=>({nama:'KUDOSTACK, Service',nmid:'-',tipe:'Statis'}));
-    const canEdit=ME&&['superadmin','admin'].includes(ME.role);
+    const canEdit=ME&&can.payEdit(ME.role);
     const qrisCache='/qris.jpg?v='+Date.now();
     el.innerHTML=`<div class="qrisbox">
       <img src="${qrisCache}" alt="QRIS KUDOSTACK" class="qrisreal" onclick="zoom('${qrisCache}')" style="cursor:zoom-in">
@@ -833,12 +870,12 @@ async function renderPay(tab){
     if(!PAYMETA)await loadPayMeta();
     const lbl={ewallet:'📱 E-Wallet',bank:'🏦 Transfer Bank',va:'🏧 Virtual Account'}[tab];
     el.innerHTML=payRows(PAYMETA?.[tab],lbl)+(
-      ME&&['superadmin','admin'].includes(ME.role)?editPaymetaHtml(tab):'');
+      ME&&can.payEdit(ME.role)?editPaymetaHtml(tab):'');
     const eb=document.getElementById('eb_'+tab);
     if(eb)eb.onclick=()=>savePaymeta(tab);
   } else if(tab==='lokasi'){
     if(!PAYMETA)await loadPayMeta();
-    el.innerHTML=lokasiHtml()+(ME&&['superadmin','admin'].includes(ME.role)?editLokasiHtml():'');
+    el.innerHTML=lokasiHtml()+(ME&&can.payEdit(ME.role)?editLokasiHtml():'');
     const lb=document.getElementById('lokSave');
     if(lb)lb.onclick=saveLokasi;
     const pk=document.getElementById('lokPick');
@@ -846,7 +883,7 @@ async function renderPay(tab){
       lk_lat.value=pos.coords.latitude.toFixed(6);lk_lng.value=pos.coords.longitude.toFixed(6);
       toast('Koordinat GPS terisi ✓ — cek lagi sebelum simpan');
     },()=>toast('GPS tidak bisa diakses — isi manual dari Google Maps'));
-  } else el.innerHTML=PAY[tab]||'';
+  } else el.innerHTML=(typeof PAY!=='undefined'&&PAY[tab])||'';
 }
 function editPaymetaHtml(tab){
   const list=PAYMETA[tab]||[];
@@ -863,7 +900,7 @@ function editPaymetaHtml(tab){
 async function savePaymeta(tab){
   const list=(PAYMETA[tab]||[]).map((x,i)=>({nama:document.getElementById(`pm_${tab}_n${i}`).value,nomor:document.getElementById(`pm_${tab}_r${i}`).value}));
   const body={[tab]:list,an:document.getElementById('pm_an').value};
-  const r=await fetch('/api/paymeta?actor='+ME.username,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const r=await fetch('/api/paymeta',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(r.ok){toast('Tersimpan ✓');await loadPayMeta();renderPay(tab);}else toast('Gagal simpan');
 }
 function editLokasiHtml(){
@@ -887,11 +924,11 @@ async function saveLokasi(){
   const lat=parseFloat(lk_lat.value),lng=parseFloat(lk_lng.value);
   if(isNaN(lat)||isNaN(lng)){toast('Latitude/longitude harus angka (cth: -7.67 / 109.65)');return;}
   const body={lokasi:{alamat:lk_alamat.value,lat,lng,catatan:lk_cat.value}};
-  const r=await fetch('/api/paymeta?actor='+ME.username,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const r=await fetch('/api/paymeta',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(r.ok){toast('Lokasi tersimpan ✓');await loadPayMeta();renderPay('lokasi');}else toast('Gagal simpan');
 }
 async function saveQrisMeta(){
-  const r=await fetch('/api/qris?actor='+ME.username,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nama:qr_nama.value,nmid:qr_nmid.value,tipe:qr_tipe.value})});
+  const r=await fetch('/api/qris',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nama:qr_nama.value,nmid:qr_nmid.value,tipe:qr_tipe.value})});
   if(r.ok){toast('Info QRIS tersimpan ✓');renderPay('qris');}else toast('Gagal simpan');
 }
 async function uploadQrisImg(inp){
@@ -899,7 +936,7 @@ async function uploadQrisImg(inp){
   if(f.size>5*1024*1024){toast('Maksimal 5 MB');return;}
   toast('Mengunggah QR baru…');
   const b64=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.readAsDataURL(f);});
-  const rr=await fetch('/api/qris/image?actor='+ME.username,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:b64})});
+  const rr=await fetch('/api/qris/image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:b64})});
   if(rr.ok){toast('Gambar QRIS diganti ✓');renderPay('qris');}else toast('Gagal ganti gambar');
 }
 document.addEventListener('click',e=>{const t=e.target.closest('.paytab');if(t)renderPay(t.dataset.pay);});
@@ -970,15 +1007,15 @@ function showPlan(id){
   $('#modal').classList.add('on');
 }
 async function savePlanInline(id){
-  const r=await fetch(`/api/plans/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:ME.username,prompt:document.getElementById('mPrompt').value,caption:document.getElementById('mCaption').value})});
+  const r=await fetch(`/api/plans/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:document.getElementById('mPrompt').value,caption:document.getElementById('mCaption').value})});
   if(r.ok){toast('Tersimpan ✓');$('#modal').classList.remove('on');renderPlanner();}else toast('Gagal');
 }
 async function setPlanStatus(id,s){
-  const r=await fetch(`/api/plans/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:ME.username,status:s})});
+  const r=await fetch(`/api/plans/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:s})});
   if(r.ok){$('#modal').classList.remove('on');renderPlanner();}else toast('Gagal');
 }
 async function delPlan(id){askConfirm('Hapus konten ini dari kalender?','📅',async ok=>{if(!ok)return;
-  const r=await fetch(`/api/plans/${id}?actor=${ME.username}`,{method:'DELETE'});
+  const r=await fetch(`/api/plans/${id}`,{method:'DELETE'});
   if(r.ok){$('#modal').classList.remove('on');renderPlanner();}else toast('Gagal');});}
 function genPrompt(){
   const judul=cp_judul.value||'konten servis';
@@ -998,7 +1035,7 @@ Output yang diharapkan: tabel storyboard (scene, durasi, visual, teks overlay, a
 }
 $('#frmPlan').onsubmit=async e=>{
   e.preventDefault();
-  const r=await fetch('/api/plans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:ME.username,tanggal:cp_tgl.value,judul:cp_judul.value,platform:cp_plat.value,brief:cp_brief.value,prompt:cp_prompt.value,caption:cp_caption.value})});
+  const r=await fetch('/api/plans',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tanggal:cp_tgl.value,judul:cp_judul.value,platform:cp_plat.value,brief:cp_brief.value,prompt:cp_prompt.value,caption:cp_caption.value})});
   if(r.ok){toast('Konten masuk kalender ✓');e.target.reset();renderPlanner();}else{const d=await r.json().catch(()=>({}));toast(d.error||'Gagal');}
 };
 
@@ -1009,21 +1046,22 @@ async function renderUsers(){
   $('#tUsers').innerHTML=`<tr><th>Username</th><th>Role</th><th>Dibuat</th><th></th></tr>`+
     us.map(u=>`<tr><td><b>${esc(u.username)}</b>${u.username===ME.username?' <span class="badge b-pink">kamu</span>':''}</td>
     <td><span class="badge ${roleCls[u.role]||'b-gray'}">${roleLbl[u.role]||u.role}</span></td><td>${u.created}</td>
-    <td>${u.username!=='superadmin'?`<button class="btn red sm" onclick="delUser('${u.username}')">🗑️</button>`:'<small style="color:#888">akun utama</small>'}</td></tr>`).join('');
+    <td>${u.hasPassword?'':'<small style="color:#b91c1c">belum ada password</small> '}<button class="btn sm" onclick="openPwd('${u.username}')">Atur password</button>
+    ${u.username!=='superadmin'?`<button class="btn red sm" onclick="delUser('${u.username}')">🗑️</button>`:'<small style="color:#888">akun utama</small>'}</td></tr>`).join('');
 }
 async function addUser(){
-  const r=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor:ME.username,username:nu_name.value,role:nu_role.value})});
+  const r=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:nu_name.value,role:nu_role.value})});
   const d=await r.json();
   if(r.ok){toast('User ditambahkan ✓');nu_name.value='';renderUsers();}else toast(d.error||'Gagal');
 }
 async function delUser(u){askConfirm('Hapus user '+u+'?','👤',async ok=>{if(!ok)return;
-  const r=await fetch(`/api/users/${u}?actor=${ME.username}`,{method:'DELETE'});
+  const r=await fetch(`/api/users/${encodeURIComponent(u)}`,{method:'DELETE'});
   const d=await r.json().catch(()=>({}));
   if(r.ok){toast('User dihapus');renderUsers();}else toast(d.error||'Gagal');});}
 
 async function init(){t_tgl.value=new Date().toISOString().slice(0,10);await refresh();renderHome();}
 setInterval(()=>{if(ME)refresh();},15000);
-(function(){try{const s=sessionStorage.getItem('kds_user');if(s){ME=JSON.parse(s);startApp();}}catch(e){}})();
+(async function(){try{sessionStorage.removeItem('kds_user');const r=await _fetch('/api/me');if(r.ok){ME=await r.json();startApp();}}catch(e){}})();
 </script>
 </body>
 </html>

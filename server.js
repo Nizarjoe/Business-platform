@@ -8,8 +8,10 @@ const PDFDocument = pdfkit.default || pdfkit;
 const {
   load, update, loadDoc, updateDoc, readOrSeed,
   uploadObject, removeStored, usingRemote, usingCloudflare, getObject, initPersistence,
+  createSession, getSession, deleteSession, deleteUserSessions, rateHit, rateGet, rateClear,
   UPLOADS_DIR, ADMIN_WA
 } = require('./db');
+const auth = require('./auth');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -32,7 +34,101 @@ const storage = usingRemote()
     });
 const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
 
+app.disable('x-powered-by');
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'X-Frame-Options': 'SAMEORIGIN',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)',
+  // index.html uses inline scripts and handlers, so 'unsafe-inline' stays until GIBRAN splits them out.
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src https://www.openstreetmap.org; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'"
+};
+app.use((req, res, next) => { res.set(SECURITY_HEADERS); if (req.path.startsWith('/api/')) res.set('Cache-Control', 'no-store'); next(); });
 app.use(express.json({ limit: '5mb' }));
+
+/* ================= SESSION + ACCESS (F1) =================
+   Every /api route needs a session except login and health. Roles come from
+   the users document on the server; the browser never names its own role. */
+const ROLES = ['superadmin', 'admin', 'anggota', 'medsos', 'customer'];
+const ALL = ROLES;
+const SA = ['superadmin'];
+const MGR = ['superadmin', 'admin'];
+const WORK = ['superadmin', 'admin', 'anggota'];
+const STAFF = ['superadmin', 'admin', 'anggota', 'medsos'];
+const CONTENT = ['superadmin', 'admin', 'medsos'];
+const FIN = MGR; // Kas: not anggota, medsos, customer (S6)
+const ACCESS = [
+  ['POST', /^\/api\/login$/, null],
+  ['GET', /^\/api\/health$/, null],
+  ['POST', /^\/api\/logout$/, ALL],
+  ['GET', /^\/api\/me$/, ALL],
+  ['POST', /^\/api\/me\/password$/, ALL],
+  ['GET', /^\/api\/users$/, SA],
+  ['POST', /^\/api\/users$/, SA],
+  ['DELETE', /^\/api\/users\/[^/]+$/, SA],
+  ['PUT', /^\/api\/users\/[^/]+\/password$/, SA],
+  ['GET', /^\/api\/projects$/, ALL],
+  ['POST', /^\/api\/projects$/, WORK],
+  ['PUT', /^\/api\/projects\/[^/]+$/, WORK],
+  ['DELETE', /^\/api\/projects\/[^/]+$/, MGR],
+  ['*', /^\/api\/projects\/[^/]+\/photo$/, WORK],
+  ['*', /^\/api\/transactions(\/|$)/, FIN],
+  ['GET', /^\/api\/stats$/, STAFF],
+  ['GET', /^\/api\/pdf\/project\/[^/]+$/, WORK],
+  ['GET', /^\/api\/pdf\//, FIN],
+  ['GET', /^\/api\/export\//, FIN],
+  ['POST', /^\/api\/send-wa$/, WORK],
+  ['GET', /^\/api\/send-wa\/outbox$/, FIN],
+  ['*', /^\/api\/plans(\/|$)/, CONTENT],
+  ['GET', /^\/api\/(qris|paymeta)$/, ALL],
+  // Payment details customers pay to: superadmin only (assumption P12).
+  ['*', /^\/api\/(qris|qris\/image|paymeta)$/, SA]
+];
+const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const isSecure = req => usingCloudflare() || req.secure || req.get('x-forwarded-proto') === 'https';
+
+function sameOrigin(req) {
+  const origin = req.get('origin');
+  const host = req.get('host');
+  if (!host) return false;
+  const allowed = [`https://${host}`, `http://${host}`];
+  if (origin) return allowed.includes(origin);
+  const ref = req.get('referer');
+  if (ref) { try { return allowed.includes(new URL(ref).origin); } catch (e) { return false; } }
+  return false;
+}
+
+async function sessionUser(req) {
+  const token = auth.readCookie(req.get('cookie'));
+  if (!token) return null;
+  const th = await auth.tokenHash(token);
+  const s = await getSession(th);
+  if (!s) return null;
+  const u = (await getUsers()).find(x => x.username === s.username);
+  if (!u) { await deleteSession(th); return null; }
+  return { username: u.username, role: u.role, tokenHash: th };
+}
+
+async function gate(req, res, next, roles) {
+  try {
+    if (UNSAFE.has(req.method) && !sameOrigin(req)) return res.status(403).json({ error: 'Origin tidak diizinkan' });
+    if (roles === null) return next();
+    const user = await sessionUser(req);
+    if (!user) return res.status(401).json({ error: 'Silakan login dulu' });
+    if (!roles.includes(user.role)) return res.status(403).json({ error: 'Tidak punya akses' });
+    req.user = user;
+    next();
+  } catch (e) { next(e); }
+}
+
+app.use('/api', (req, res, next) => {
+  const p = req.baseUrl + req.path;
+  const rule = ACCESS.find(([m, re]) => (m === '*' || m === req.method || (m === 'GET' && req.method === 'HEAD')) && re.test(p));
+  // Unknown endpoints still need a session; they end in the 404 handler.
+  return gate(req, res, next, rule ? rule[2] : ALL);
+});
+// Uploaded photos are client data: logged-in staff and customers only.
+const filesGate = (req, res, next) => gate(req, res, next, ALL);
 
 // Replaced QRIS images live in Storage when Supabase is configured. The page
 // still requests /qris.jpg, so serve that URL from the stored public object.
@@ -83,7 +179,7 @@ if (EMBEDDED) {
     if (a.type.startsWith('text/html')) res.set('Cache-Control', 'no-cache');
     res.send(Buffer.from(a.b64, 'base64'));
   });
-  app.get(/^\/files\/.+/, async (req, res) => {
+  app.get(/^\/files\/.+/, filesGate, async (req, res) => {
     const stored = await getObject(req.path);
     if (!stored) return res.status(404).send('Not found');
     res.set('Content-Type', stored.contentType);
@@ -92,7 +188,7 @@ if (EMBEDDED) {
   });
 }
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(UPLOADS_DIR));
+app.use('/uploads', filesGate, express.static(UPLOADS_DIR));
 
 function safeExt(name) {
   const ext = path.extname(name || '').toLowerCase();
@@ -123,21 +219,105 @@ function userSeed() {
 }
 const getUsers = () => readOrSeed('users', userSeed);
 
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_PER_USER = 8;
+const LOGIN_MAX_PER_IP = 30;
+const clientIp = req => req.get('cf-connecting-ip') || req.ip || 'unknown';
+
+// Never log req.body here: it holds the password.
 app.post('/api/login', async (req, res) => {
-  const { username } = req.body || {};
-  const u = (await getUsers()).find(x => x.username.toLowerCase() === String(username || '').trim().toLowerCase());
-  if (!u) return res.status(401).json({ error: 'Username tidak ditemukan' });
+  const b = req.body || {};
+  const name = String(b.username || '').trim().toLowerCase().slice(0, 64);
+  const password = typeof b.password === 'string' ? b.password : '';
+  const ipKey = 'login:ip:' + clientIp(req);
+  const userKey = 'login:user:' + name;
+  // Only failed attempts count, so a busy office behind one IP is not locked out.
+  const [ip, per] = await Promise.all([rateGet(ipKey), rateGet(userKey)]);
+  if (ip.count >= LOGIN_MAX_PER_IP || per.count >= LOGIN_MAX_PER_USER) {
+    res.set('Retry-After', String(Math.max(1, Math.ceil((Math.max(ip.resetAt, per.resetAt) - Date.now()) / 1000))));
+    return res.status(429).json({ error: 'Terlalu banyak percobaan login. Coba lagi beberapa menit lagi.' });
+  }
+  const users = await getUsers();
+  const u = users.find(x => x.username.toLowerCase() === name);
+  let ok = false;
+  if (u && !u.pass && u.role === 'superadmin' && process.env.BP_PASS_SUPERADMIN) {
+    // First login of the built-in superadmin on a server that was given an
+    // initial password; store its hash so the env value is no longer needed.
+    ok = !!password && await auth.sameSecret(password, process.env.BP_PASS_SUPERADMIN);
+    if (ok) {
+      const rec = await auth.hashPassword(password);
+      await updateDoc('users', userSeed, us => { const t = us.find(x => x.username === u.username); if (t && !t.pass) t.pass = rec; return us; });
+    }
+  } else {
+    ok = await auth.verifyPassword(password, u && u.pass);
+  }
+  if (!ok) {
+    await Promise.all([rateHit(ipKey, LOGIN_WINDOW_MS), rateHit(userKey, LOGIN_WINDOW_MS)]);
+    if (u && !u.pass) return res.status(401).json({ error: 'Password akun ini belum diatur. Minta superadmin mengaturnya.' });
+    return res.status(401).json({ error: 'Username atau password salah' });
+  }
+  await rateClear(userKey);
+  const token = auth.newToken();
+  await createSession(await auth.tokenHash(token), u.username, Date.now() + auth.SESSION_TTL_MS);
+  res.set('Cache-Control', 'no-store');
+  res.append('Set-Cookie', auth.sessionCookie(token, isSecure(req)));
   res.json({ ok: true, username: u.username, role: u.role });
 });
-app.get('/api/users', async (req, res) => res.json((await getUsers()).map(({ username, role, created }) => ({ username, role, created }))));
+
+app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+app.post('/api/logout', async (req, res) => {
+  await deleteSession(req.user.tokenHash);
+  res.append('Set-Cookie', auth.clearCookie(isSecure(req)));
+  res.json({ ok: true });
+});
+
+app.get('/api/me', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ username: req.user.username, role: req.user.role });
+});
+
+async function setPassword(username, password) {
+  const rec = await auth.hashPassword(password);
+  let found = false;
+  await updateDoc('users', userSeed, us => {
+    const t = us.find(x => x.username === username);
+    if (t) { t.pass = rec; found = true; }
+    return us;
+  });
+  return found;
+}
+
+// Change your own password: needs the current one; other sessions are ended.
+app.post('/api/me/password', async (req, res) => {
+  const { current, next } = req.body || {};
+  const problem = auth.passwordProblem(next);
+  if (problem) return res.status(400).json({ error: problem });
+  const me = (await getUsers()).find(x => x.username === req.user.username);
+  if (!me || !(await auth.verifyPassword(typeof current === 'string' ? current : '', me.pass)))
+    return res.status(403).json({ error: 'Password lama salah' });
+  await setPassword(me.username, next);
+  await deleteUserSessions(me.username, req.user.tokenHash);
+  res.json({ ok: true });
+});
+
+// Superadmin sets (or resets) another user's password; that user's sessions end.
+app.put('/api/users/:username/password', async (req, res) => {
+  const name = String(req.params.username || '').toLowerCase();
+  const problem = auth.passwordProblem((req.body || {}).password);
+  if (problem) return res.status(400).json({ error: problem });
+  if (!(await setPassword(name, req.body.password))) return res.status(404).json({ error: 'User tidak ditemukan' });
+  await deleteUserSessions(name, name === req.user.username ? req.user.tokenHash : '');
+  res.json({ ok: true });
+});
+
+app.get('/api/users', async (req, res) => res.json((await getUsers()).map(({ username, role, created, pass }) => ({ username, role, created, hasPassword: !!pass }))));
 app.post('/api/users', async (req, res) => {
-  const { actor, username, role } = req.body || {};
+  const { username, role } = req.body || {};
   const name = String(username || '').trim().toLowerCase();
   if (!name) return res.status(400).json({ error: 'Username wajib diisi' });
   let forbidden = false, conflict = false, created = null;
   await updateDoc('users', userSeed, (us) => {
-    const actorU = us.find(x => x.username === actor);
-    if (!actorU || actorU.role !== 'superadmin') { forbidden = true; return us; }
     if (us.find(x => x.username === name)) { conflict = true; return us; }
     created = { username: name, role: ['superadmin','admin','anggota','medsos','customer'].includes(role) ? role : 'anggota', created: new Date().toISOString().slice(0, 10) };
     us.push(created);
@@ -152,25 +332,34 @@ app.delete('/api/users/:username', async (req, res) => {
   if (name === 'superadmin') return res.status(400).json({ error: 'Superadmin utama tidak boleh dihapus' });
   let forbidden = false, missing = false;
   await updateDoc('users', userSeed, (us) => {
-    const actorU = us.find(x => x.username === req.query.actor);
-    if (!actorU || actorU.role !== 'superadmin') { forbidden = true; return us; }
     if (!us.find(x => x.username === name)) { missing = true; return us; }
     return us.filter(x => x.username !== name);
   });
+  if (!missing) await deleteUserSessions(name, '');
   if (forbidden) return res.status(403).json({ error: 'Hanya superadmin bisa hapus user' });
   if (missing) return res.status(404).json({ error: 'User tidak ditemukan' });
   res.json({ ok: true });
 });
 
 /* ================= PROJECTS ================= */
+// Customers get progress fields only: no client names, phone numbers, prices,
+// photos, or signatures of other customers (S5 partly; per-customer scoping is F2).
+const CUSTOMER_FIELDS = ['id', 'tgl', 'nama', 'layanan', 'pic', 'status', 'diagnosis', 'output', 'garansiNum', 'garansiUnit', 'garansiAkhir'];
 app.get('/api/projects', async (req, res) => {
   const db = await load();
-  res.json(db.projects.sort((a, b) => b.id.localeCompare(a.id)));
+  const list = db.projects.sort((a, b) => b.id.localeCompare(a.id));
+  if (req.user.role === 'customer') {
+    return res.json(list.filter(p => p.status !== 'Selesai / Closing')
+      .map(p => Object.fromEntries(CUSTOMER_FIELDS.map(k => [k, p[k]]))));
+  }
+  res.json(list);
 });
 
 app.post('/api/projects', async (req, res) => {
   const b = req.body || {};
   if (!b.nama || !b.layanan || !b.pic) return res.status(400).json({ error: 'Nama, layanan, dan PIC wajib diisi' });
+  if (b.bayar && b.bayar !== 'Belum Bayar' && req.user.role !== 'superadmin')
+    return res.status(403).json({ error: 'Status bayar hanya bisa diubah superadmin' });
   const p = await update(db => {
     const tgl = new Date().toISOString().slice(0, 10);
     const project = {
@@ -193,12 +382,15 @@ app.post('/api/projects', async (req, res) => {
 });
 
 app.put('/api/projects/:id', async (req, res) => {
-  let missing = false;
+  let missing = false, bayarDenied = false;
+  const body = { ...(req.body || {}) };
+  delete body.id; delete body.fotoIn; delete body.fotoOut;
   const p = await update(db => {
     const project = db.projects.find(x => x.id === req.params.id);
     if (!project) { missing = true; return null; }
+    if (body.bayar !== undefined && body.bayar !== project.bayar && req.user.role !== 'superadmin') { bayarDenied = true; return null; }
     const prevBayar = project.bayar, prevStatus = project.status;
-    Object.assign(project, req.body);
+    Object.assign(project, body);
     project.biaya = Number(project.biaya || 0);
     project.garansiNum = Number(project.garansiNum || 0);
     // garansi mulai berlalu saat closing
@@ -217,6 +409,7 @@ app.put('/api/projects/:id', async (req, res) => {
     }
     return project;
   });
+  if (bayarDenied) return res.status(403).json({ error: 'Status bayar hanya bisa diubah superadmin' });
   if (missing) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
   res.json(p);
 });
@@ -335,11 +528,15 @@ app.get('/api/stats', async (req, res) => {
     tungguBayar: ps.filter(p => p.status === 'Menunggu Pembayaran' || (p.bayar !== 'Lunas' && p.status !== 'Komplain / Kendala' && p.status !== 'Selesai / Closing')).length,
     selesai: ps.filter(p => p.status === 'Selesai / Closing').length,
     komplain: ps.filter(p => p.status === 'Komplain / Kendala').length,
-    uangMasuk: inSum, uangKeluar: outSum, saldo: inSum - outSum,
+    // Kas figures only for roles that may open Kas (S6).
+    finance: FIN.includes(req.user.role),
+    uangMasuk: FIN.includes(req.user.role) ? inSum : null,
+    uangKeluar: FIN.includes(req.user.role) ? outSum : null,
+    saldo: FIN.includes(req.user.role) ? inSum - outSum : null,
     omzet: ps.filter(p => p.bayar === 'Lunas').reduce((s, p) => s + p.biaya, 0),
     piutang: ps.filter(p => p.bayar !== 'Lunas').reduce((s, p) => s + p.biaya, 0),
     layanan: { Hardware: byLayanan('Hardware'), Software: byLayanan('Software'), DLL: byLayanan('DLL') },
-    statusCount, months
+    statusCount, months: FIN.includes(req.user.role) ? months : []
   });
 });
 
@@ -789,16 +986,13 @@ const getPlans = () => readOrSeed('plans', () => []);
 
 app.get('/api/plans', async (req, res) => res.json(await getPlans()));
 app.post('/api/plans', async (req, res) => {
-  const { actor, tanggal, judul, platform, brief, prompt, caption } = req.body || {};
-  const actorU = (await getUsers()).find(x => x.username === actor);
-  if (!actorU || !['superadmin', 'admin', 'medsos'].includes(actorU.role))
-    return res.status(403).json({ error: 'Hanya superadmin/admin/medsos bisa kelola konten' });
+  const { tanggal, judul, platform, brief, prompt, caption } = req.body || {};
   if (!tanggal || !judul) return res.status(400).json({ error: 'Tanggal & judul wajib' });
   const item = {
     id: 'CP-' + Date.now(),
     tanggal, judul, platform: platform || 'Instagram',
     brief: brief || '', prompt: prompt || '', caption: caption || '',
-    status: 'Draft', dibuat: actor || '-', createdAt: new Date().toISOString()
+    status: 'Draft', dibuat: req.user.username, createdAt: new Date().toISOString()
   };
   await updateDoc('plans', () => [], (plans) => {
     const list = Array.isArray(plans) ? plans : [];
@@ -808,9 +1002,6 @@ app.post('/api/plans', async (req, res) => {
   res.json(item);
 });
 app.put('/api/plans/:id', async (req, res) => {
-  const actorU = (await getUsers()).find(x => x.username === (req.body || {}).actor);
-  if (!actorU || !['superadmin', 'admin', 'medsos'].includes(actorU.role))
-    return res.status(403).json({ error: 'Tidak punya akses' });
   let missing = false, saved = null;
   await updateDoc('plans', () => [], (plans) => {
     const list = Array.isArray(plans) ? plans : [];
@@ -825,9 +1016,6 @@ app.put('/api/plans/:id', async (req, res) => {
   res.json(saved);
 });
 app.delete('/api/plans/:id', async (req, res) => {
-  const actorU = (await getUsers()).find(x => x.username === req.query.actor);
-  if (!actorU || !['superadmin', 'admin', 'medsos'].includes(actorU.role))
-    return res.status(403).json({ error: 'Tidak punya akses' });
   await updateDoc('plans', () => [], (plans) => (Array.isArray(plans) ? plans : []).filter(x => x.id !== req.params.id));
   res.json({ ok: true });
 });
@@ -842,9 +1030,6 @@ async function getQrisMeta() {
 }
 app.get('/api/qris', async (req, res) => res.json(await getQrisMeta()));
 app.post('/api/qris', async (req, res) => {
-  const u = (await getUsers()).find(x => x.username === req.query.actor);
-  if (!u || !['superadmin', 'admin'].includes(u.role))
-    return res.status(403).json({ error: 'Hanya superadmin/admin bisa mengganti QRIS' });
   const { nama, nmid, tipe } = req.body || {};
   const meta = await updateDoc('qris-meta', () => ({ ...QRIS_DEFAULT }), (current) => {
     const next = (!current || typeof current !== 'object' || Array.isArray(current)) ? { ...QRIS_DEFAULT } : current;
@@ -852,15 +1037,12 @@ app.post('/api/qris', async (req, res) => {
     if (nmid !== undefined) next.nmid = nmid;
     if (tipe !== undefined) next.tipe = tipe;
     next.diubah = new Date().toISOString().slice(0, 10);
-    next.oleh = req.query.actor;
+    next.oleh = req.user.username;
     return next;
   });
   res.json({ ok: true, meta });
 });
 app.post('/api/qris/image', async (req, res) => {
-  const u = (await getUsers()).find(x => x.username === req.query.actor);
-  if (!u || !['superadmin', 'admin'].includes(u.role))
-    return res.status(403).json({ error: 'Hanya superadmin/admin bisa mengganti QRIS' });
   const b64 = (req.body || {}).image || '';
   const m = b64.match(/^data:image\/(png|jpe?g);base64,(.+)$/);
   if (!m) return res.status(400).json({ error: 'File harus gambar PNG/JPG (maks 5 MB)' });
@@ -877,7 +1059,7 @@ app.post('/api/qris/image', async (req, res) => {
     if (imageUrl) next.imageUrl = imageUrl;
     else delete next.imageUrl;
     next.diubah = new Date().toISOString().slice(0, 10);
-    next.oleh = req.query.actor;
+    next.oleh = req.user.username;
     return next;
   });
   res.json({ ok: true });
@@ -908,9 +1090,6 @@ async function getPayMeta() {
 }
 app.get('/api/paymeta', async (req, res) => res.json(await getPayMeta()));
 app.put('/api/paymeta', async (req, res) => {
-  const u = (await getUsers()).find(x => x.username === req.query.actor);
-  if (!u || !['superadmin', 'admin'].includes(u.role))
-    return res.status(403).json({ error: 'Hanya superadmin/admin' });
   const b = req.body || {};
   const meta = await updateDoc('paymeta', () => JSON.parse(JSON.stringify(DEF_PAYMETA)), (current) => {
     const next = (!current || typeof current !== 'object' || Array.isArray(current))
@@ -926,6 +1105,12 @@ app.put('/api/paymeta', async (req, res) => {
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Endpoint tidak ditemukan' }));
 app.use((err, req, res, next) => {
+  // Body-parser errors carry the raw request body (e.g. a login password): log the type only.
+  if (err && err.type && err.status && err.status < 500) {
+    console.error('bad request:', err.type);
+    if (res.headersSent) return next(err);
+    return res.status(err.status).json({ error: 'Permintaan tidak valid' });
+  }
   console.error(err);
   if (res.headersSent) return next(err);
   if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: 'Maksimal 10 MB' });

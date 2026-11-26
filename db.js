@@ -22,7 +22,8 @@ const LOCAL_FILES = {
   plans: 'plans.json',
   'qris-meta': 'qris-meta.json',
   paymeta: 'paymeta.json',
-  'wa-outbox': 'wa-outbox.json'
+  'wa-outbox': 'wa-outbox.json',
+  sessions: 'sessions.json'
 };
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
@@ -351,7 +352,90 @@ async function removeStored(url) {
   }
 }
 
+/* ---------- sessions + login rate limits (F1) ----------
+   Cloudflare: D1 tables from migrations/0002_sessions.sql.
+   Local/Supabase: a "sessions" document; rate limits in memory (one process). */
+async function createSession(tokenHash, username, expiresAt) {
+  if (CF) {
+    await CF.DB.prepare('insert into sessions (token_hash, username, expires_at) values (?1, ?2, ?3)')
+      .bind(tokenHash, username, expiresAt).run();
+    return;
+  }
+  await updateDoc('sessions', () => ({}), all => {
+    const now = Date.now();
+    for (const k of Object.keys(all)) if (all[k].exp < now) delete all[k];
+    all[tokenHash] = { u: username, exp: expiresAt };
+    return all;
+  });
+}
+
+async function getSession(tokenHash) {
+  const now = Date.now();
+  if (CF) {
+    const row = await CF.DB.prepare('select username, expires_at from sessions where token_hash = ?').bind(tokenHash).first();
+    if (!row) return null;
+    if (row.expires_at < now) { await deleteSession(tokenHash); return null; }
+    return { username: row.username, expiresAt: row.expires_at };
+  }
+  const all = (await loadDoc('sessions')) || {};
+  const s = all[tokenHash];
+  if (!s || s.exp < now) return null;
+  return { username: s.u, expiresAt: s.exp };
+}
+
+async function deleteSession(tokenHash) {
+  if (CF) { await CF.DB.prepare('delete from sessions where token_hash = ?').bind(tokenHash).run(); return; }
+  await updateDoc('sessions', () => ({}), all => { delete all[tokenHash]; return all; });
+}
+
+async function deleteUserSessions(username, exceptHash) {
+  if (CF) {
+    await CF.DB.prepare('delete from sessions where username = ?1 and token_hash <> ?2').bind(username, exceptHash || '').run();
+    return;
+  }
+  await updateDoc('sessions', () => ({}), all => {
+    for (const k of Object.keys(all)) if (all[k].u === username && k !== exceptHash) delete all[k];
+    return all;
+  });
+}
+
+const memRate = new Map();
+// Counts one attempt for key. Returns { count, resetAt } for the current window.
+async function rateHit(key, windowMs) {
+  const now = Date.now();
+  if (CF) {
+    const row = await CF.DB.prepare(
+      'insert into rate_limits (key, count, reset_at) values (?1, 1, ?2) on conflict(key) do update set ' +
+      'count = case when rate_limits.reset_at < ?3 then 1 else rate_limits.count + 1 end, ' +
+      'reset_at = case when rate_limits.reset_at < ?3 then ?2 else rate_limits.reset_at end ' +
+      'returning count, reset_at'
+    ).bind(key, now + windowMs, now).first();
+    return { count: row.count, resetAt: row.reset_at };
+  }
+  let r = memRate.get(key);
+  if (!r || r.resetAt < now) r = { count: 0, resetAt: now + windowMs };
+  r.count++;
+  memRate.set(key, r);
+  return { ...r };
+}
+
+async function rateGet(key) {
+  const now = Date.now();
+  if (CF) {
+    const row = await CF.DB.prepare('select count, reset_at from rate_limits where key = ?').bind(key).first();
+    return row && row.reset_at >= now ? { count: row.count, resetAt: row.reset_at } : { count: 0, resetAt: now };
+  }
+  const r = memRate.get(key);
+  return r && r.resetAt >= now ? { ...r } : { count: 0, resetAt: now };
+}
+
+async function rateClear(key) {
+  if (CF) { await CF.DB.prepare('delete from rate_limits where key = ?').bind(key).run(); return; }
+  memRate.delete(key);
+}
+
 module.exports = {
+  createSession, getSession, deleteSession, deleteUserSessions, rateHit, rateGet, rateClear,
   load, save, loadDoc, saveDoc, update, updateDoc, readOrSeed,
   uploadObject, removeStored, usingRemote, usingCloudflare, getObject, initPersistence,
   DB_FILE, DATA_DIR, UPLOADS_DIR, ADMIN_WA, BUCKET

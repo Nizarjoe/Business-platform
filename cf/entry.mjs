@@ -19,7 +19,7 @@ const SECURITY_HEADERS = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'X-Frame-Options': 'SAMEORIGIN',
   'Strict-Transport-Security': 'max-age=31536000',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(self)'
 };
 
 const require_ = (await import('./require-server.cjs')).default;

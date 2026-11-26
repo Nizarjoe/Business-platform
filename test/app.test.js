@@ -477,6 +477,7 @@ test('local files: projects, payments, photos, reports, and the other JSON store
 
     assert.strictEqual((await api(base, 'DELETE', '/api/projects/' + second.data.id)).status, 200);
     assert.strictEqual((await api(base, 'GET', '/api/nope')).status, 404);
+    assert.strictEqual((await api(base, 'GET', '/api/backups')).status, 501, 'backups are Cloudflare-only');
 
     await app.stop();
     app = await startApp(env);

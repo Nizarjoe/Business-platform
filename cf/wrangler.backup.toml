@@ -1,0 +1,8 @@
+# Scheduled backup Worker (F8). Bindings and the cron are set at deploy time
+# (scripts/build-cf.mjs only bundles; see README "Backup otomatis").
+name = "business-platform-backup"
+main = "backup-worker.mjs"
+compatibility_date = "2025-11-01"
+
+[triggers]
+crons = ["0 19 * * *"] # 02:00 WIB

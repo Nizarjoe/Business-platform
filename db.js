@@ -500,7 +500,7 @@ async function rateClear(key) {
 
 module.exports = {
   createSession, getSession, deleteSession, deleteUserSessions, rateHit, rateGet, rateClear,
-  addAudit, listAudit, storageInfo, usingTables,
+  addAudit, listAudit, storageInfo, usingTables, cfEnv: () => CF,
   load, save, loadDoc, saveDoc, update, updateDoc, readOrSeed,
   uploadObject, removeStored, usingRemote, usingCloudflare, getObject, initPersistence,
   DB_FILE, DATA_DIR, UPLOADS_DIR, ADMIN_WA, BUCKET

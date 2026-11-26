@@ -77,3 +77,19 @@ SHA-256 JSON, lalu baru mengubah `settings.storage` menjadi `tables`. Kalau hasi
 sama, nilainya menjadi `migrate-failed` dan aplikasi tetap memakai `app_documents`.
 Laporan ada di `GET /api/admin/storage` (superadmin). `app_documents` tidak dihapus;
 `updated_at`-nya diberi akhiran `#migrated` dan isinya beku sejak saat itu.
+
+### Backup otomatis (F8)
+
+- Worker terjadwal `business-platform-backup` (`cf/backup-worker.mjs`, dibundel oleh
+  `npm run build` ke `cf-dist-backup/worker.js`) jalan tiap hari 19:00 UTC (02:00 WIB):
+  semua tabel aplikasi (tanpa sessions/rate_limits) disalin dalam satu batch D1 ke KV
+  `BACKUPS` dengan kunci `backup/<waktu>.json`, kedaluwarsa otomatis setelah 14 hari.
+- Binding Worker: `DB` = D1 produksi, `BACKUPS` = KV backup. Pages project juga perlu
+  binding `BACKUPS` (production dan preview) untuk endpoint di bawah.
+- Superadmin: `GET /api/backups` (daftar), `POST /api/backups` (buat sekarang),
+  `GET /api/backups/<nama>.json` (unduh). Ada juga di menu Kelola User. Unduhan dan
+  pembuatan backup masuk log audit. File berisi hash password: simpan di tempat aman.
+- Pemulihan: `node scripts/restore-backup.mjs backup.json > restore.sql`, lalu
+  `npx wrangler d1 execute business-platform --remote --file restore.sql`. Skrip itu
+  mengosongkan lalu mengisi ulang setiap tabel yang ada di backup. Coba dulu di
+  database preview.

@@ -20,3 +20,13 @@ if (out.length !== 1 || !out[0].endsWith('.js')) throw new Error('expected one b
 fs.mkdirSync('cf-dist');
 fs.copyFileSync(path.join('cf/.bundle', out[0]), 'cf-dist/_worker.js');
 console.log('worker bytes', fs.statSync('cf-dist/_worker.js').size);
+
+// F8: scheduled backup Worker (deployed separately, see README "Backup otomatis").
+fs.rmSync('cf/.bundle-backup', { recursive: true, force: true });
+fs.rmSync('cf-dist-backup', { recursive: true, force: true });
+execFileSync('npx', ['wrangler', 'deploy', '--dry-run', '--config', 'cf/wrangler.backup.toml', '--outdir', '.bundle-backup'], { stdio: 'inherit' });
+const bout = fs.readdirSync('cf/.bundle-backup').filter(n => n.endsWith('.js'));
+if (bout.length !== 1) throw new Error('expected one backup worker module, got ' + bout.join(','));
+fs.mkdirSync('cf-dist-backup');
+fs.copyFileSync(path.join('cf/.bundle-backup', bout[0]), 'cf-dist-backup/worker.js');
+console.log('backup worker bytes', fs.statSync('cf-dist-backup/worker.js').size);

@@ -10,3 +10,7 @@ cf-dist/
 cf/.bundle/
 .bp-dev.toml
 .bundle/
+cf-dist-backup/
+cf/.bundle-backup/
+.bp-backup-dev.toml
+.bundle-backup/

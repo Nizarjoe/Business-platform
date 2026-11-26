@@ -464,6 +464,12 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
   </div>
   <div class="tbl-wrap"><table id="tUsers"></table></div>
   <div class="panel" style="margin-top:14px">
+    <h3>Backup data</h3>
+    <p style="font-size:.78rem;color:#666;margin:4px 0 8px">Backup otomatis tiap hari pukul 02:00 WIB, disimpan 14 hari. File berisi semua data termasuk hash password: simpan di tempat aman.</p>
+    <div class="flex" style="gap:8px"><button class="btn blue" id="btnBackup" onclick="runBackup()">Buat backup sekarang</button></div>
+    <div class="tbl-wrap" style="margin-top:10px"><table id="tBackups"></table></div>
+  </div>
+  <div class="panel" style="margin-top:14px">
     <h3>Log perubahan info bayar</h3>
     <p style="font-size:.78rem;color:#666;margin:4px 0 8px">Perubahan rekening, e-wallet, VA, QRIS, lokasi, dan status bayar proyek. 200 terbaru.</p>
     <div class="tbl-wrap"><table id="tAudit"></table></div>
@@ -1079,10 +1085,22 @@ async function renderUsers(){
     <td><span class="badge ${roleCls[u.role]||'b-gray'}">${roleLbl[u.role]||u.role}</span></td><td>${u.created}</td>
     <td>${u.hasPassword?'':'<small style="color:#b91c1c">belum ada password</small> '}<button class="btn sm" onclick="openPwd('${u.username}')">Atur password</button>
     ${u.username!=='superadmin'?`<button class="btn red sm" onclick="delUser('${u.username}')">🗑️</button>`:'<small style="color:#888">akun utama</small>'}</td></tr>`).join('');
-  renderAudit();
+  renderAudit();renderBackups();
 }
-const AUDIT_LBL={paymeta:'Info pembayaran','qris.meta':'Info QRIS','qris.image':'Gambar QRIS','project.bayar':'Status bayar proyek'};
+const AUDIT_LBL={'backup.run':'Backup dibuat','backup.download':'Backup diunduh',paymeta:'Info pembayaran','qris.meta':'Info QRIS','qris.image':'Gambar QRIS','project.bayar':'Status bayar proyek'};
 const short=v=>{const t=typeof v==='string'?v:JSON.stringify(v);return t&&t.length>140?t.slice(0,140)+'…':(t||'-');};
+async function renderBackups(){
+  const r=await fetch('/api/backups');
+  if(!r.ok){$('#tBackups').innerHTML=`<tr><td class="empty">${esc(await errOf(r))}</td></tr>`;return;}
+  const list=await r.json();
+  $('#tBackups').innerHTML='<tr><th>Waktu</th><th>Pemicu</th><th>Isi</th><th>Ukuran</th><th></th></tr>'+(list.length?list.map(b=>{const n=b.key.replace(/^backup\//,'');return `<tr><td>${esc(new Date(b.at).toLocaleString('id-ID'))}</td><td>${esc(b.trigger||'-')}</td><td><small>${esc(Object.entries(b.counts||{}).map(([k,v])=>k+' '+v).join(', '))}</small></td><td>${Math.ceil((b.bytes||0)/1024)} KB</td><td><a class="btn sm" href="/api/backups/${encodeURIComponent(n)}">Unduh</a></td></tr>`;}).join(''):'<tr><td colspan="5" class="empty">Belum ada backup</td></tr>');
+}
+async function runBackup(){
+  const b=$('#btnBackup');b.disabled=true;
+  const r=await fetch('/api/backups',{method:'POST'});
+  b.disabled=false;
+  if(r.ok){toast('Backup dibuat');renderBackups();renderAudit();}else toast(await errOf(r));
+}
 async function renderAudit(){
   const r=await fetch('/api/audit');if(!r.ok)return;
   const log=await r.json();

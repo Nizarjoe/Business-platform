@@ -12,3 +12,7 @@ migrations_dir = "migrations"
 [[kv_namespaces]]
 binding = "FILES"
 id = "b1d129c3f7b24334975bc79071576193"
+
+[[kv_namespaces]]
+binding = "BACKUPS"
+id = "97d1b044790143289df2ddb801f26190"

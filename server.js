@@ -9,10 +9,11 @@ const {
   load, update, loadDoc, updateDoc, readOrSeed,
   uploadObject, removeStored, usingRemote, usingCloudflare, getObject, initPersistence,
   createSession, getSession, deleteSession, deleteUserSessions, rateHit, rateGet, rateClear,
-  addAudit, listAudit, storageInfo,
+  addAudit, listAudit, storageInfo, cfEnv,
   UPLOADS_DIR, ADMIN_WA
 } = require('./db');
 const auth = require('./auth');
+const backup = require('./backup');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -70,6 +71,7 @@ const ACCESS = [
   ['PUT', /^\/api\/users\/[^/]+\/password$/, SA],
   ['GET', /^\/api\/admin\//, SA],
   ['GET', /^\/api\/audit$/, SA],
+  ['*', /^\/api\/backups(\/|$)/, SA],
   ['GET', /^\/api\/projects$/, ALL],
   ['POST', /^\/api\/projects$/, WORK],
   ['PUT', /^\/api\/projects\/[^/]+$/, WORK],
@@ -316,6 +318,31 @@ async function confirmPassword(req, res) {
   return true;
 }
 const audit = (req, action, target, detail) => addAudit({ actor: req.user.username, action, target, detail: { ...detail, ip: clientIp(req) } });
+/* F8: backups live in the BACKUPS KV namespace (Cloudflare only). The cron
+   Worker cf/backup-worker.mjs writes one every night; superadmin can make one
+   now and download any of the last 14 days. */
+const backupEnv = () => { const env = cfEnv(); return env && env.BACKUPS ? env : null; };
+const noBackups = res => res.status(501).json({ error: 'Backup otomatis hanya tersedia di Cloudflare (binding BACKUPS)' });
+app.get('/api/backups', async (req, res) => {
+  const env = backupEnv(); if (!env) return noBackups(res);
+  res.json(await backup.listBackups(env.BACKUPS));
+});
+app.post('/api/backups', async (req, res) => {
+  const env = backupEnv(); if (!env) return noBackups(res);
+  const r = await backup.runBackup(env.DB, env.BACKUPS, 'manual ' + req.user.username);
+  await audit(req, 'backup.run', r.key, { after: { counts: r.counts, bytes: r.bytes } });
+  res.json(r);
+});
+app.get('/api/backups/:name', async (req, res) => {
+  const env = backupEnv(); if (!env) return noBackups(res);
+  if (!backup.validKey(req.params.name)) return res.status(400).json({ error: 'Nama backup tidak valid' });
+  const body = await env.BACKUPS.get(backup.PREFIX + req.params.name, 'text');
+  if (body === null) return res.status(404).json({ error: 'Backup tidak ditemukan' });
+  await audit(req, 'backup.download', req.params.name, {});
+  res.set('Content-Type', 'application/json; charset=utf-8');
+  res.set('Content-Disposition', `attachment; filename="business-platform-${req.params.name}"`);
+  res.send(body);
+});
 app.get('/api/audit', async (req, res) => res.json(await listAudit(Math.min(Number(req.query.limit) || 200, 500))));
 
 async function setPassword(username, password) {

@@ -832,7 +832,7 @@ function drawProj(LIST){
   $('#tProj').innerHTML=html;
 }
 /* F7: staged payments + invoices (superadmin) */
-async function openPay(id){let p=PROJECTS.find(x=>x.id===id);if(!p){await refresh();p=PROJECTS.find(x=>x.id===id);}if(!p)return;const list=p.pembayaran||[];const paid=list.reduce((s,x)=>s+x.nominal,0);
+async function openPay(id){await refresh();const p=PROJECTS.find(x=>x.id===id);if(!p)return;const list=p.pembayaran||[];const paid=list.reduce((s,x)=>s+x.nominal,0);
   $('#modalBox').innerHTML=`<h3>Pembayaran ${esc(p.id)} — ${esc(p.nama)}</h3>
   <p style="font-size:.8rem;color:#666;margin:6px 0 10px">Biaya ${rupiah(p.biaya)} · terbayar ${rupiah(paid)} · sisa ${rupiah(Math.max(0,p.biaya-paid))} · ${bayarBadge(p.bayar)}</p>
   <div class="tbl-wrap"><table id="tPay"><tr><th>Invoice</th><th>Tanggal</th><th>Jenis</th><th>Nominal</th><th></th></tr>${list.length?list.map(x=>`<tr><td>${esc(x.no)}</td><td>${esc(x.tgl)}</td><td>${esc(x.jenis)}</td><td>${rupiah(x.nominal)}</td><td><a class="btn sm" href="/api/pdf/invoice/${encodeURIComponent(p.id)}/${encodeURIComponent(x.id)}">Invoice</a> <button class="btn red sm" onclick="delPay('${p.id}','${x.id}')">Hapus</button></td></tr>`).join(''):'<tr><td colspan="5" class="empty">Belum ada pembayaran</td></tr>'}</table></div>
@@ -843,7 +843,7 @@ async function savePay(id){const r=await fetch(`/api/projects/${id}/payments`,{m
   if(!r.ok){toast(await errOf(r));return;}const d=await r.json();toast(d.pay.no+' tercatat — '+d.bayar);await refresh();renderProj();if($('#modal').classList.contains('on'))await openPay(id);}
 function delPay(id,pid){askConfirm('Hapus pembayaran ini? Transaksi Kas-nya ikut terhapus.','',async ok=>{if(!ok)return;const r=await fetch(`/api/projects/${id}/payments/${pid}`,{method:'DELETE'});if(!r.ok){toast(await errOf(r));return;}await refresh();renderProj();if($('#modal').classList.contains('on'))await openPay(id);});}
 /* F14: attachments */
-async function openFiles(id){let p=PROJECTS.find(x=>x.id===id);if(!p){await refresh();p=PROJECTS.find(x=>x.id===id);}if(!p)return;const l=p.lampiran||[];
+async function openFiles(id){await refresh();const p=PROJECTS.find(x=>x.id===id);if(!p)return;const l=p.lampiran||[];
   $('#modalBox').innerHTML=`<h3>Lampiran ${esc(p.id)} — ${esc(p.nama)}</h3>
   <p style="font-size:.8rem;color:#666;margin:6px 0 10px">PDF, JPG, PNG, WEBP, DOCX, XLSX, PPTX, maksimal 10 MB. Hanya bisa dibuka tim yang memegang proyek ini.</p>
   <div class="tbl-wrap"><table id="tFiles"><tr><th>Nama</th><th>Ukuran</th><th>Oleh</th><th></th></tr>${l.length?l.map(f=>`<tr><td>${esc(f.name)}</td><td>${Math.ceil(f.size/1024)} KB</td><td>${esc(f.by)}</td><td><a class="btn sm" href="/api/projects/${encodeURIComponent(p.id)}/files/${encodeURIComponent(f.id)}">Unduh</a> <button class="btn red sm" onclick="delFile('${p.id}','${f.id}')">Hapus</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty">Belum ada lampiran</td></tr>'}</table></div>

@@ -258,6 +258,15 @@ test('local files: projects, payments, photos, reports, and the other JSON store
 
     const created = await api(base, 'GET', '/api/projects');
     assert.strictEqual(created.data.length, 5);
+    // server-side search + paging (F6/F10)
+    assert.deepStrictEqual((await api(base, 'GET', '/api/projects?q=SATU')).data.map(p => p.id), [first.data.id]);
+    assert.ok((await api(base, 'GET', '/api/projects?layanan=Software')).data.every(p => p.layanan === 'Software'));
+    assert.deepStrictEqual((await api(base, 'GET', '/api/projects?status=Baru%20Masuk&pic=rizky')).data.map(p => p.id), [first.data.id]);
+    const paged = await api(base, 'GET', '/api/projects?limit=2&offset=1');
+    assert.strictEqual(paged.data.length, 2);
+    assert.strictEqual(paged.headers.get('x-total-count'), '5');
+    assert.deepStrictEqual((await api(base, 'GET', '/api/transactions?jenis=Uang%20Keluar')).data.map(t => t.id), ['TRX-002']);
+    assert.deepStrictEqual((await api(base, 'GET', '/api/transactions?q=thermal')).data.map(t => t.id), ['TRX-002']);
 
     const lunas = await api(base, 'PUT', '/api/projects/' + first.data.id, { bayar: 'Lunas' });
     assert.strictEqual(lunas.status, 200);

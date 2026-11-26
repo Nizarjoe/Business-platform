@@ -23,7 +23,8 @@ const LOCAL_FILES = {
   'qris-meta': 'qris-meta.json',
   paymeta: 'paymeta.json',
   'wa-outbox': 'wa-outbox.json',
-  sessions: 'sessions.json'
+  sessions: 'sessions.json',
+  audit: 'audit.json'
 };
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
@@ -41,6 +42,30 @@ const CF = globalThis.__CF_ENV && globalThis.__CF_ENV.DB && globalThis.__CF_ENV.
   ? globalThis.__CF_ENV
   : null;
 const CF_PREFIX = '/files/';
+const TABLES = CF ? require('./d1tables').makeStore(CF.DB) : null;
+
+// S7/F6: 'docs' = one JSON row per document in app_documents (original layout);
+// 'tables' = one row per record (d1tables.js). The switch is one-way and is
+// requested by setting settings.storage = 'migrate' (see README "Migrasi tabel").
+let storageCached = null;
+async function storageMode() {
+  if (!CF) return 'docs';
+  if (storageCached) return storageCached;
+  let v;
+  try { v = await CF.DB.prepare("select value from settings where key = 'storage'").first('value'); }
+  catch (e) { return 'docs'; } // settings table not created yet (migration 0003 not applied)
+  if (v === 'tables') return (storageCached = 'tables');
+  if (v === 'migrate') {
+    try {
+      const r = await TABLES.migrate();
+      if (!r.ok) console.error('table migration:', r.reason);
+    } catch (e) { console.error('table migration failed:', e.message); }
+    const again = await CF.DB.prepare("select value from settings where key = 'storage'").first('value');
+    if (again === 'tables') return (storageCached = 'tables');
+  }
+  return 'docs';
+}
+const usingTables = async () => (await storageMode()) === 'tables';
 
 let supabase = null;
 if (!CF && SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
@@ -181,7 +206,12 @@ async function writeDocUnlocked(id, data) {
   else await writeRow(id, data);
 }
 
-function load() {
+async function load() {
+  if (await usingTables()) {
+    const { data } = await TABLES.read('main');
+    if (data !== undefined) return data;
+    return (await TABLES.update('main', seedData, async db => ({ store: db }))).store;
+  }
   return lock(() => readMainUnlocked());
 }
 
@@ -189,7 +219,8 @@ function save(db) {
   return lock(() => writeMainUnlocked(db));
 }
 
-function loadDoc(id) {
+async function loadDoc(id) {
+  if (await usingTables()) return (await TABLES.read(id)).data;
   return lock(() => readDocUnlocked(id));
 }
 
@@ -218,6 +249,8 @@ async function cfWriteIfUnchanged(id, data, version) {
 async function cfUpdate(id, fallback, step) {
   for (let attempt = 0; attempt < 15; attempt++) {
     if (attempt) await new Promise(r => setTimeout(r, 15 + Math.random() * 40 * attempt));
+    // Re-checked on every attempt: a switch to tables makes this write's CAS fail.
+    if (await usingTables()) return TABLES.update(id, fallback, step);
     const { data: current, version } = await cfReadVersioned(id);
     let data = current;
     if (data === undefined || data === null) data = typeof fallback === 'function' ? fallback() : clone(fallback);
@@ -257,7 +290,12 @@ function updateDoc(id, fallback, mutator) {
   });
 }
 
-function readOrSeed(id, fallback) {
+async function readOrSeed(id, fallback) {
+  if (await usingTables()) {
+    const { data } = await TABLES.read(id);
+    if (data !== undefined && data !== null) return data;
+    return (await TABLES.update(id, fallback, async d => ({ store: d }))).store;
+  }
   return lock(async () => {
     const existing = await readDocUnlocked(id);
     if (existing !== undefined && existing !== null) return existing;
@@ -399,6 +437,32 @@ async function deleteUserSessions(username, exceptHash) {
   });
 }
 
+/* ---------- audit log (F3) ----------
+   Cloudflare tables mode: audit table. Otherwise an "audit" document capped at 500 entries. */
+const AUDIT_MAX = 500;
+async function addAudit(entry) {
+  const e = { ts: new Date().toISOString(), ...entry };
+  if (await usingTables()) return TABLES.appendAudit(e);
+  await updateDoc('audit', () => [], list => {
+    const l = Array.isArray(list) ? list : [];
+    l.push({ id: (l.length ? l[l.length - 1].id : 0) + 1, ...e });
+    return l.slice(-AUDIT_MAX);
+  });
+}
+async function listAudit(limit = 200) {
+  if (await usingTables()) return TABLES.listAudit(limit);
+  const l = (await loadDoc('audit')) || [];
+  return l.slice(-limit).reverse();
+}
+async function storageInfo() {
+  const mode = await storageMode();
+  let report = null;
+  if (CF) {
+    try { const v = await CF.DB.prepare("select value from settings where key = 'migration-report'").first('value'); report = v ? JSON.parse(v) : null; } catch (e) {}
+  }
+  return { mode: CF ? 'cloudflare-' + mode : supabase ? 'supabase' : 'local', report };
+}
+
 const memRate = new Map();
 // Counts one attempt for key. Returns { count, resetAt } for the current window.
 async function rateHit(key, windowMs) {
@@ -436,6 +500,7 @@ async function rateClear(key) {
 
 module.exports = {
   createSession, getSession, deleteSession, deleteUserSessions, rateHit, rateGet, rateClear,
+  addAudit, listAudit, storageInfo, usingTables,
   load, save, loadDoc, saveDoc, update, updateDoc, readOrSeed,
   uploadObject, removeStored, usingRemote, usingCloudflare, getObject, initPersistence,
   DB_FILE, DATA_DIR, UPLOADS_DIR, ADMIN_WA, BUCKET

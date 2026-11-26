@@ -9,6 +9,7 @@ const {
   load, update, loadDoc, updateDoc, readOrSeed,
   uploadObject, removeStored, usingRemote, usingCloudflare, getObject, initPersistence,
   createSession, getSession, deleteSession, deleteUserSessions, rateHit, rateGet, rateClear,
+  addAudit, listAudit, storageInfo,
   UPLOADS_DIR, ADMIN_WA
 } = require('./db');
 const auth = require('./auth');
@@ -67,6 +68,7 @@ const ACCESS = [
   ['POST', /^\/api\/users$/, SA],
   ['DELETE', /^\/api\/users\/[^/]+$/, SA],
   ['PUT', /^\/api\/users\/[^/]+\/password$/, SA],
+  ['GET', /^\/api\/admin\//, SA],
   ['GET', /^\/api\/projects$/, ALL],
   ['POST', /^\/api\/projects$/, WORK],
   ['PUT', /^\/api\/projects\/[^/]+$/, WORK],
@@ -267,6 +269,8 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+// Storage layout and the S7 migration report (counts + SHA-256 per document).
+app.get('/api/admin/storage', async (req, res) => res.json(await storageInfo()));
 
 app.post('/api/logout', async (req, res) => {
   await deleteSession(req.user.tokenHash);
@@ -377,11 +381,38 @@ async function checkCustomers(value) {
 }
 const sameList = (a, b) => JSON.stringify([...(a || [])].sort()) === JSON.stringify([...(b || [])].sort());
 
+/* Server-side search (F6/F10). Every filter is optional; values are exact
+   except q (case-insensitive substring) and dari/sampai (inclusive dates).
+   limit/offset page the result; X-Total-Count carries the full match count. */
+const qs = v => (Array.isArray(v) ? String(v[0] || '') : String(v || '')).trim();
+const PROJECT_TEXT = ['id', 'nama', 'klien', 'wa', 'pic', 'layanan', 'input', 'output', 'diagnosis'];
+function filterProjects(list, q) {
+  const text = lc(qs(q.q)), status = qs(q.status), bayar = qs(q.bayar), layanan = qs(q.layanan), pic = lc(qs(q.pic));
+  const dari = qs(q.dari), sampai = qs(q.sampai);
+  return list.filter(p =>
+    (!text || PROJECT_TEXT.some(f => lc(p[f]).includes(text))) &&
+    (!status || p.status === status) && (!bayar || p.bayar === bayar) && (!layanan || p.layanan === layanan) &&
+    (!pic || lc(p.pic) === pic) && (!dari || String(p.tgl || '') >= dari) && (!sampai || String(p.tgl || '') <= sampai));
+}
+const TRX_TEXT = ['id', 'kategori', 'pic', 'ket', 'jenis'];
+function filterTransactions(list, q) {
+  const text = lc(qs(q.q)), jenis = qs(q.jenis), kategori = qs(q.kategori), dari = qs(q.dari), sampai = qs(q.sampai);
+  return list.filter(t =>
+    (!text || TRX_TEXT.some(f => lc(t[f]).includes(text))) && (!jenis || t.jenis === jenis) &&
+    (!kategori || t.kategori === kategori) && (!dari || t.tgl >= dari) && (!sampai || t.tgl <= sampai));
+}
+function pageOf(res, list, q) {
+  res.set('X-Total-Count', String(list.length));
+  const limit = Math.min(Math.max(parseInt(qs(q.limit), 10) || 0, 0), 1000);
+  const offset = Math.max(parseInt(qs(q.offset), 10) || 0, 0);
+  return limit ? list.slice(offset, offset + limit) : list.slice(offset);
+}
+
 app.get('/api/projects', async (req, res) => {
   const db = await load();
-  const list = visibleProjects(req.user, db.projects).sort((a, b) => b.id.localeCompare(a.id));
-  if (req.user.role === 'customer') return res.json(list.map(customerView));
-  res.json(list);
+  const list = filterProjects(visibleProjects(req.user, db.projects), req.query).sort((a, b) => b.id.localeCompare(a.id));
+  const out = pageOf(res, list, req.query);
+  res.json(req.user.role === 'customer' ? out.map(customerView) : out);
 });
 
 // Superadmin/admin link customer accounts to a project.
@@ -529,11 +560,7 @@ app.post('/api/projects/:id/photo', upload.single('photo'), async (req, res) => 
 /* ================= TRANSACTIONS ================= */
 app.get('/api/transactions', async (req, res) => {
   const db = await load();
-  let t = db.transactions.slice().reverse();
-  const { dari, sampai } = req.query;
-  if (dari) t = t.filter(x => x.tgl >= dari);
-  if (sampai) t = t.filter(x => x.tgl <= sampai);
-  res.json(t);
+  res.json(pageOf(res, filterTransactions(db.transactions.slice().reverse(), req.query), req.query));
 });
 app.post('/api/transactions', async (req, res) => {
   const { tgl, jenis, kategori, nominal, pic, ket } = req.body || {};

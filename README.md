@@ -60,3 +60,20 @@ npx wrangler pages deploy cf-dist --project-name business-platform
 ```
 
 The Pages project needs compatibility date `2025-11-01`, flags `nodejs_compat`, `enable_nodejs_http_modules`, `enable_nodejs_http_server_modules`, a D1 binding `DB` and a KV binding `FILES`.
+
+### Migrasi tabel D1 (S7/F6)
+
+Awalnya semua data Cloudflare ada di tabel `app_documents` (satu baris JSON per dokumen).
+Migrasi `0003_tables.sql` menambah tabel `projects`, `transactions`, `plans`, `users`,
+`settings`, dan `audit`. Aplikasi tetap membaca `app_documents` sampai diminta pindah:
+
+```sql
+insert into settings (key, value) values ('storage', 'migrate');
+```
+
+Request berikutnya menyalin semua dokumen ke tabel dalam satu batch yang dijaga
+`updated_at` tiap dokumen, membaca ulang hasilnya, membandingkan jumlah baris dan
+SHA-256 JSON, lalu baru mengubah `settings.storage` menjadi `tables`. Kalau hasil tidak
+sama, nilainya menjadi `migrate-failed` dan aplikasi tetap memakai `app_documents`.
+Laporan ada di `GET /api/admin/storage` (superadmin). `app_documents` tidak dihapus;
+`updated_at`-nya diberi akhiran `#migrated` dan isinya beku sejak saat itu.

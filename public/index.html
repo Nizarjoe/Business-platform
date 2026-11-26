@@ -279,6 +279,7 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
         <div><label>Penanggung Jawab (PIC) *</label><input id="f_pic" required></div>
         <div><label>Nama Klien</label><input id="f_klien"></div>
         <div><label>No. WA Klien</label><input id="f_wa" placeholder="62xxx"></div>
+        <div id="f_custWrap" style="display:none"><label>Akun Customer (username, pisahkan koma)</label><input id="f_cust" placeholder="cth: tokoberkah" autocapitalize="none"></div>
         <div><label>Biaya (Rp)</label><input id="f_biaya" type="number" min="0"></div>
         <div><label>Status Bayar</label><select id="f_bayar"><option>Belum Bayar</option><option>DP</option><option>Lunas</option></select></div>
         <div><label>Status Pengerjaan</label><select id="f_status"><option>Baru Masuk</option><option>Sedang Dikerjakan</option><option>Menunggu Pembayaran</option><option>Selesai / Closing</option><option>Komplain / Kendala</option></select></div>
@@ -503,7 +504,7 @@ const esc=s=>String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 // Session cookie is HttpOnly; a 401 from the API means it expired or was revoked.
 const _fetch=window.fetch.bind(window);
 window.fetch=async(u,o)=>{const r=await _fetch(u,o);if(r.status===401&&ME&&typeof u==='string'&&u.startsWith('/api/')&&u!=='/api/login'){ME=null;toast('Sesi berakhir, silakan login lagi');setTimeout(()=>location.reload(),1200);}return r;};
-const can={fin:r=>['superadmin','admin'].includes(r),staff:r=>r!=='customer',payEdit:r=>r==='superadmin',bayar:r=>r==='superadmin'};
+const can={link:r=>['superadmin','admin'].includes(r),fin:r=>['superadmin','admin'].includes(r),staff:r=>r!=='customer',payEdit:r=>r==='superadmin',bayar:r=>r==='superadmin'};
 let PWD_TARGET=null;
 function openPwd(user){PWD_TARGET=user||null;$('#pwdTitle').textContent=user?'Atur password untuk '+user:'Ganti password';$('#pwdUser').value=user||ME.username;$('#pwdCurWrap').style.display=user?'none':'block';['#pwdCur','#pwdNew','#pwdNew2'].forEach(k=>$(k).value='');$('#pwdErr').textContent='';$('#pwdBox').style.display='flex';}
 function closePwd(){$('#pwdBox').style.display='none';['#pwdCur','#pwdNew','#pwdNew2'].forEach(k=>$(k).value='');}
@@ -554,6 +555,7 @@ function startApp(){
   $('#navKas').style.display=can.fin(r)?'flex':'none';
   $('#f_bayar').disabled=!can.bayar(r);$('#f_bayar').title=can.bayar(r)?'':'Status bayar hanya bisa diubah superadmin';
   $('#navProj').style.display=isCust?'none':'flex';
+  $('#f_custWrap').style.display=can.link(r)?'block':'none';
   $('#custInfo').style.display='block';
   $('#smPanel').style.display=['superadmin','admin','medsos'].includes(r)?'block':'none';
   $('#socLinks').style.display=isCust?'none':'block'; // customer tidak perlu generator caption panel? tetap tampil akun resmi
@@ -589,8 +591,8 @@ function progressPct(p){
   return step[p.status]??10;
 }
 function custView(){
-  // customer: hanya proyek dgn nomor WA-nya yang terdaftar ATAU semua proyek aktif (sederhana: tampil semua proyek berjalan)
-  const mine=PROJECTS.filter(p=>p.status!=='Selesai / Closing');
+  // customer: server only returns projects linked to this account (F2)
+  const mine=PROJECTS;
   $('#custProj').innerHTML=mine.length?mine.map(p=>{
     const pct=progressPct(p);
     const steps=['Baru Masuk','Sedang Dikerjakan','Menunggu Pembayaran','Selesai / Closing'];
@@ -608,8 +610,10 @@ function custView(){
         ${p.diagnosis?`<small style="display:block;color:#666"><b>Diagnosis:</b> ${esc(p.diagnosis)}</small>`:''}
         ${p.output?`<small style="display:block;color:#666"><b>Hasil:</b> ${esc(p.output)}</small>`:''}
         ${p.garansiNum?`<small style="display:block;color:#666"><b>Garansi:</b> 🛡️ ${p.garansiNum} ${p.garansiUnit}</small>`:''}
-      </div></div>`;
-  }).join(''):`<div class="panel empty">Belum ada proyek yang sedang dikerjakan 💤</div>`;
+        <small style="display:block;color:#666"><b>Biaya:</b> ${rupiah(p.biaya)} · ${bayarBadge(p.bayar)}</small>
+      </div>
+      <div class="rowbtns" style="margin-top:8px"><a class="btn sm" href="/api/pdf/project/${encodeURIComponent(p.id)}">Unduh nota</a></div></div>`;
+  }).join(''):`<div class="panel empty">Belum ada proyek yang ditautkan ke akun Anda. Hubungi admin Kudostack.</div>`;
 }
 
 async function renderHome(){
@@ -681,13 +685,14 @@ window.addEventListener('DOMContentLoaded',sigInit);
 $('#frmProj').onsubmit=async e=>{
   e.preventDefault();
   const body={nama:f_nama.value,layanan:f_layanan.value,pic:f_pic.value,klien:f_klien.value,wa:f_wa.value,biaya:f_biaya.value,bayar:f_bayar.value,status:f_status.value,input:f_input.value,diagnosis:f_diag.value,output:f_output.value,reportTeknisi:f_report.value,garansiNum:f_garNum.value,garansiUnit:f_garUnit.value,signature:sigData||null};
+  if(can.link(ME.role))body.customers=f_cust.value.split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);
   const id=f_id.value;
   const r=await fetch(id?`/api/projects/${id}`:'/api/projects',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(!r.ok){toast('Gagal menyimpan!');return;}
+  if(!r.ok){const e=await r.json().catch(()=>({}));toast(e.error||'Gagal menyimpan!');return;}
   toast(id?'Proyek update ✓':'Proyek tersimpan ✓');resetFrm();await refresh();renderProj();
 };
 function editProj(id){const p=PROJECTS.find(x=>x.id===id);if(!p)return;
-  f_id.value=p.id;f_nama.value=p.nama;f_layanan.value=p.layanan;f_pic.value=p.pic;f_klien.value=p.klien;f_wa.value=p.wa;f_biaya.value=p.biaya;f_bayar.value=p.bayar;f_status.value=p.status;f_input.value=p.input;f_diag.value=p.diagnosis||'';f_output.value=p.output;f_report.value=p.reportTeknisi||'';f_garNum.value=p.garansiNum||0;f_garUnit.value=p.garansiUnit||'bulan';
+  f_id.value=p.id;f_nama.value=p.nama;f_layanan.value=p.layanan;f_pic.value=p.pic;f_klien.value=p.klien;f_wa.value=p.wa;f_biaya.value=p.biaya;f_bayar.value=p.bayar;f_status.value=p.status;f_input.value=p.input;f_diag.value=p.diagnosis||'';f_output.value=p.output;f_report.value=p.reportTeknisi||'';f_garNum.value=p.garansiNum||0;f_garUnit.value=p.garansiUnit||'bulan';f_cust.value=(p.customers||[]).join(', ');
   sigClear();if(p.signature){const img=new Image();img.onload=()=>{const c=document.getElementById('sigCanvas');c.getContext('2d').drawImage(img,0,0,c.width,c.height);sigData=p.signature;document.getElementById('sigState').textContent='✓ tanda tangan tersimpan';};img.src=p.signature;}
   $('#frmTitle').textContent='✏️ Edit '+p.id;window.scrollTo({top:0,behavior:'smooth'});}
 async function delProj(id){askConfirm('Yakin hapus proyek '+id+'? Data tidak bisa dikembalikan.','🗑️',async ok=>{if(!ok)return;await fetch('/api/projects/'+id,{method:'DELETE'});await refresh();renderProj();toast('Terhapus');});}

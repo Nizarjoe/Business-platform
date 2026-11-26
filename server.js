@@ -70,11 +70,13 @@ const ACCESS = [
   ['GET', /^\/api\/projects$/, ALL],
   ['POST', /^\/api\/projects$/, WORK],
   ['PUT', /^\/api\/projects\/[^/]+$/, WORK],
+  ['PUT', /^\/api\/projects\/[^/]+\/customers$/, MGR],
   ['DELETE', /^\/api\/projects\/[^/]+$/, MGR],
   ['*', /^\/api\/projects\/[^/]+\/photo$/, WORK],
   ['*', /^\/api\/transactions(\/|$)/, FIN],
   ['GET', /^\/api\/stats$/, STAFF],
-  ['GET', /^\/api\/pdf\/project\/[^/]+$/, WORK],
+  // Customers may download the nota of a project linked to them (checked in the route).
+  ['GET', /^\/api\/pdf\/project\/[^/]+$/, [...WORK, 'customer']],
   ['GET', /^\/api\/pdf\//, FIN],
   ['GET', /^\/api\/export\//, FIN],
   ['POST', /^\/api\/send-wa$/, WORK],
@@ -335,24 +337,66 @@ app.delete('/api/users/:username', async (req, res) => {
     if (!us.find(x => x.username === name)) { missing = true; return us; }
     return us.filter(x => x.username !== name);
   });
-  if (!missing) await deleteUserSessions(name, '');
+  if (!missing) {
+    await deleteUserSessions(name, '');
+    // A later account with the same name must not inherit this customer's projects.
+    await update(db => { db.projects.forEach(p => { if (Array.isArray(p.customers) && p.customers.includes(name)) p.customers = p.customers.filter(x => x !== name); }); });
+  }
   if (forbidden) return res.status(403).json({ error: 'Hanya superadmin bisa hapus user' });
   if (missing) return res.status(404).json({ error: 'User tidak ditemukan' });
   res.json({ ok: true });
 });
 
 /* ================= PROJECTS ================= */
-// Customers get progress fields only: no client names, phone numbers, prices,
-// photos, or signatures of other customers (S5 partly; per-customer scoping is F2).
-const CUSTOMER_FIELDS = ['id', 'tgl', 'nama', 'layanan', 'pic', 'status', 'diagnosis', 'output', 'garansiNum', 'garansiUnit', 'garansiAkhir'];
+// Who sees which project (F2, S5, P13):
+//  customer -> only projects whose `customers` list holds their username;
+//  anggota  -> projects whose PIC equals their username, or that they created;
+//  superadmin, admin, medsos -> all.
+// Hidden projects answer 404 so their IDs do not leak.
+const lc = v => String(v || '').trim().toLowerCase();
+function canSeeProject(user, p) {
+  if (!user || !p) return false;
+  if (user.role === 'customer') return Array.isArray(p.customers) && p.customers.includes(user.username);
+  if (user.role === 'anggota') return lc(p.pic) === user.username || p.createdBy === user.username;
+  return true;
+}
+const visibleProjects = (user, list) => list.filter(p => canSeeProject(user, p));
+// Customers get their own project's progress and bill only: no phone numbers,
+// photos, signatures, technician notes, or the list of linked accounts.
+const CUSTOMER_FIELDS = ['id', 'tgl', 'nama', 'layanan', 'pic', 'status', 'bayar', 'biaya', 'diagnosis', 'output', 'garansiNum', 'garansiUnit', 'garansiAkhir'];
+const customerView = p => Object.fromEntries(CUSTOMER_FIELDS.map(k => [k, p[k]]));
+
+// Returns { list } or { error }. Only accounts with role customer can be linked.
+async function checkCustomers(value) {
+  if (!Array.isArray(value)) return { error: 'customers harus berupa daftar username' };
+  const users = await getUsers();
+  const names = [...new Set(value.map(lc).filter(Boolean))];
+  const bad = names.filter(n => !users.some(u => u.username === n && u.role === 'customer'));
+  if (bad.length) return { error: 'Bukan akun customer: ' + bad.join(', ') };
+  return { list: names };
+}
+const sameList = (a, b) => JSON.stringify([...(a || [])].sort()) === JSON.stringify([...(b || [])].sort());
+
 app.get('/api/projects', async (req, res) => {
   const db = await load();
-  const list = db.projects.sort((a, b) => b.id.localeCompare(a.id));
-  if (req.user.role === 'customer') {
-    return res.json(list.filter(p => p.status !== 'Selesai / Closing')
-      .map(p => Object.fromEntries(CUSTOMER_FIELDS.map(k => [k, p[k]]))));
-  }
+  const list = visibleProjects(req.user, db.projects).sort((a, b) => b.id.localeCompare(a.id));
+  if (req.user.role === 'customer') return res.json(list.map(customerView));
   res.json(list);
+});
+
+// Superadmin/admin link customer accounts to a project.
+app.put('/api/projects/:id/customers', async (req, res) => {
+  const checked = await checkCustomers((req.body || {}).customers);
+  if (checked.error) return res.status(400).json({ error: checked.error });
+  let missing = false;
+  const p = await update(db => {
+    const project = db.projects.find(x => x.id === req.params.id);
+    if (!project) { missing = true; return null; }
+    project.customers = checked.list;
+    return project;
+  });
+  if (missing) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
+  res.json({ id: p.id, customers: p.customers });
 });
 
 app.post('/api/projects', async (req, res) => {
@@ -360,6 +404,13 @@ app.post('/api/projects', async (req, res) => {
   if (!b.nama || !b.layanan || !b.pic) return res.status(400).json({ error: 'Nama, layanan, dan PIC wajib diisi' });
   if (b.bayar && b.bayar !== 'Belum Bayar' && req.user.role !== 'superadmin')
     return res.status(403).json({ error: 'Status bayar hanya bisa diubah superadmin' });
+  let customers = [];
+  if (b.customers !== undefined && !(Array.isArray(b.customers) && !b.customers.length)) {
+    if (!MGR.includes(req.user.role)) return res.status(403).json({ error: 'Hanya superadmin/admin bisa menautkan customer' });
+    const checked = await checkCustomers(b.customers);
+    if (checked.error) return res.status(400).json({ error: checked.error });
+    customers = checked.list;
+  }
   const p = await update(db => {
     const tgl = new Date().toISOString().slice(0, 10);
     const project = {
@@ -371,7 +422,8 @@ app.post('/api/projects', async (req, res) => {
       diagnosis: b.diagnosis || '', reportTeknisi: b.reportTeknisi || '',
       garansiNum: Number(b.garansiNum || 0), garansiUnit: b.garansiUnit || 'bulan', garansiAkhir: '',
       signature: b.signature || null,
-      fotoIn: [], fotoOut: []
+      fotoIn: [], fotoOut: [],
+      customers, createdBy: req.user.username
     };
     if (project.status === 'Selesai / Closing' && project.garansiNum > 0)
       project.garansiAkhir = addPeriode(tgl, project.garansiNum, project.garansiUnit);
@@ -382,13 +434,19 @@ app.post('/api/projects', async (req, res) => {
 });
 
 app.put('/api/projects/:id', async (req, res) => {
-  let missing = false, bayarDenied = false;
+  let missing = false, bayarDenied = false, linkDenied = false;
   const body = { ...(req.body || {}) };
-  delete body.id; delete body.fotoIn; delete body.fotoOut;
+  delete body.id; delete body.fotoIn; delete body.fotoOut; delete body.createdBy;
+  if (body.customers !== undefined) {
+    const checked = await checkCustomers(body.customers);
+    if (checked.error) return res.status(400).json({ error: checked.error });
+    body.customers = checked.list;
+  }
   const p = await update(db => {
     const project = db.projects.find(x => x.id === req.params.id);
-    if (!project) { missing = true; return null; }
+    if (!project || !canSeeProject(req.user, project)) { missing = true; return null; }
     if (body.bayar !== undefined && body.bayar !== project.bayar && req.user.role !== 'superadmin') { bayarDenied = true; return null; }
+    if (body.customers !== undefined && !sameList(body.customers, project.customers) && !MGR.includes(req.user.role)) { linkDenied = true; return null; }
     const prevBayar = project.bayar, prevStatus = project.status;
     Object.assign(project, body);
     project.biaya = Number(project.biaya || 0);
@@ -410,6 +468,7 @@ app.put('/api/projects/:id', async (req, res) => {
     return project;
   });
   if (bayarDenied) return res.status(403).json({ error: 'Status bayar hanya bisa diubah superadmin' });
+  if (linkDenied) return res.status(403).json({ error: 'Hanya superadmin/admin bisa menautkan customer' });
   if (missing) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
   res.json(p);
 });
@@ -431,7 +490,7 @@ app.delete('/api/projects/:id/photo', async (req, res) => {
   let missing = false;
   await update(db => {
     const p = db.projects.find(x => x.id === req.params.id);
-    if (!p) { missing = true; return; }
+    if (!p || !canSeeProject(req.user, p)) { missing = true; return; }
     p[kind] = (p[kind] || []).filter(u => u !== url);
   });
   if (missing) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
@@ -442,6 +501,10 @@ app.delete('/api/projects/:id/photo', async (req, res) => {
 app.post('/api/projects/:id/photo', upload.single('photo'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Tidak ada file' });
   const kind = req.query.kind === 'out' ? 'fotoOut' : 'fotoIn';
+  if (!canSeeProject(req.user, (await load()).projects.find(x => x.id === req.params.id))) {
+    if (!usingRemote() && req.file.filename) await removeStored('/uploads/' + req.file.filename);
+    return res.status(404).json({ error: 'Proyek tidak ditemukan' });
+  }
   let url;
   if (usingRemote()) {
     const objectPath = `photos/${safeId(req.params.id)}-${Date.now()}-${Math.round(Math.random() * 1e6)}${safeExt(req.file.originalname)}`;
@@ -452,7 +515,7 @@ app.post('/api/projects/:id/photo', upload.single('photo'), async (req, res) => 
   let missing = false;
   await update(db => {
     const p = db.projects.find(x => x.id === req.params.id);
-    if (!p) { missing = true; return; }
+    if (!p || !canSeeProject(req.user, p)) { missing = true; return; }
     if (!Array.isArray(p[kind])) p[kind] = [];
     p[kind].push(url);
   });
@@ -501,7 +564,7 @@ app.delete('/api/transactions/:id', async (req, res) => {
 /* ================= STATS (+ omzet + chart series) ================= */
 app.get('/api/stats', async (req, res) => {
   const db = await load();
-  const ps = db.projects, trx = db.transactions;
+  const ps = visibleProjects(req.user, db.projects), trx = db.transactions;
   const inSum = trx.filter(t => t.jenis === 'Uang Masuk').reduce((s, t) => s + t.nominal, 0);
   const outSum = trx.filter(t => t.jenis === 'Uang Keluar').reduce((s, t) => s + t.nominal, 0);
   const byLayanan = l => {
@@ -661,7 +724,7 @@ function paint(doc, map, src, x, y, fit) {
 app.get('/api/pdf/project/:id', async (req, res) => {
   const db = await load();
   const p = db.projects.find(x => x.id === req.params.id);
-  if (!p) return res.status(404).json({ error: 'not found' });
+  if (!p || !canSeeProject(req.user, p)) return res.status(404).json({ error: 'not found' });
   const doc = new PDFDocument({ margin: 50, size: 'A4' });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="Nota-${p.id}.pdf"`);

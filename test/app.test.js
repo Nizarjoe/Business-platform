@@ -336,6 +336,12 @@ test('local files: projects, payments, photos, reports, and the other JSON store
       assert.strictEqual((await api(base, 'PUT', `/api/users/${name}/password`, { password: name + '-pass-123' })).status, 200);
     }
     const saCookie = jar.cookie;
+    // F2: link a customer account to its project; only customer accounts can be linked
+    const own = await api(base, 'POST', '/api/projects', { nama: 'Milik pelanggan', layanan: 'Hardware', pic: 'Tekno', klien: 'Pak Pelanggan', wa: '0812', biaya: 123000, customers: ['Pelanggan'] });
+    assert.strictEqual(own.status, 200, own.text);
+    assert.deepStrictEqual(own.data.customers, ['pelanggan']);
+    assert.strictEqual((await api(base, 'PUT', `/api/projects/${own.data.id}/customers`, { customers: ['tekno'] })).status, 400, 'anggota is not a customer');
+    assert.strictEqual((await api(base, 'PUT', `/api/projects/${own.data.id}/customers`, { customers: 'pelanggan' })).status, 400);
     assert.strictEqual((await api(base, 'DELETE', '/api/users/kasir')).status, 200);
     assert.ok(!(await api(base, 'GET', '/api/users')).data.some(u => u.username === 'kasir'));
 
@@ -348,6 +354,9 @@ test('local files: projects, payments, photos, reports, and the other JSON store
     assert.strictEqual((await api(base, 'POST', '/api/projects', { nama: 'A', layanan: 'DLL', pic: 'B', bayar: 'Lunas' })).status, 403);
     assert.strictEqual((await api(base, 'PUT', '/api/projects/' + second.data.id, { output: 'oleh admin', bayar: 'Belum Bayar' })).status, 200, 'unchanged bayar is fine');
     assert.strictEqual((await api(base, 'GET', '/api/transactions')).status, 200);
+    const link = await api(base, 'PUT', `/api/projects/${own.data.id}/customers`, { customers: ['pelanggan'] });
+    assert.strictEqual(link.status, 200, 'admin may link customers');
+    assert.deepStrictEqual(link.data.customers, ['pelanggan']);
     const planOk = await api(base, 'POST', '/api/plans', { tanggal: '2026-11-12', judul: 'Before after', platform: 'Instagram', caption: 'halo' });
     assert.strictEqual(planOk.status, 200);
     assert.strictEqual(planOk.data.dibuat, 'admin');
@@ -357,7 +366,18 @@ test('local files: projects, payments, photos, reports, and the other JSON store
 
     // anggota (teknisi): projects yes, Kas/plans/exports no, finance hidden in stats
     await loginAs(base, 'tekno', 'tekno-pass-123');
-    assert.strictEqual((await api(base, 'GET', '/api/projects')).status, 200);
+    const tp = await api(base, 'GET', '/api/projects');
+    assert.strictEqual(tp.status, 200);
+    assert.deepStrictEqual(tp.data.map(p => p.id), [own.data.id], 'anggota sees only projects where PIC = username');
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + second.data.id, { output: 'bukan punya saya' })).status, 404);
+    assert.strictEqual((await api(base, 'GET', '/api/pdf/project/' + second.data.id)).status, 404);
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + own.data.id, { customers: [] })).status, 403, 'anggota cannot relink');
+    assert.strictEqual((await api(base, 'PUT', `/api/projects/${own.data.id}/customers`, { customers: [] })).status, 403);
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + own.data.id, { output: 'dikerjakan tekno' })).status, 200);
+    const mine = await api(base, 'POST', '/api/projects', { nama: 'Dibuat tekno', layanan: 'DLL', pic: 'Orang Lain' });
+    assert.strictEqual(mine.status, 200);
+    assert.ok((await api(base, 'GET', '/api/projects')).data.some(p => p.id === mine.data.id), 'creator keeps access');
+    assert.strictEqual((await api(base, 'POST', '/api/projects', { nama: 'X', layanan: 'DLL', pic: 'Y', customers: ['pelanggan'] })).status, 403);
     assert.strictEqual((await api(base, 'GET', '/api/transactions')).status, 403);
     assert.strictEqual((await api(base, 'POST', '/api/transactions', { jenis: 'Uang Masuk', nominal: 1 })).status, 403);
     assert.strictEqual((await api(base, 'GET', '/api/export/transactions.csv')).status, 403);
@@ -380,7 +400,12 @@ test('local files: projects, payments, photos, reports, and the other JSON store
     await loginAs(base, 'pelanggan', 'pelanggan-pass-123');
     const cp = await api(base, 'GET', '/api/projects');
     assert.strictEqual(cp.status, 200);
-    assert.ok(cp.data.length > 0 && cp.data.every(p => p.klien === undefined && p.wa === undefined && p.biaya === undefined && p.signature === undefined));
+    assert.deepStrictEqual(cp.data.map(p => p.id), [own.data.id], 'customer sees only linked projects');
+    assert.ok(cp.data.every(p => p.klien === undefined && p.wa === undefined && p.signature === undefined && p.customers === undefined && p.reportTeknisi === undefined));
+    assert.strictEqual(cp.data[0].biaya, 123000);
+    assert.strictEqual((await api(base, 'GET', '/api/pdf/project/' + own.data.id)).status, 200);
+    assert.strictEqual((await api(base, 'GET', '/api/pdf/project/' + second.data.id)).status, 404);
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + own.data.id, { output: 'x' })).status, 403);
     for (const u of ['/api/transactions', '/api/stats', '/api/users', '/api/export/projects.csv', '/api/plans', '/api/send-wa/outbox'])
       assert.strictEqual((await api(base, 'GET', u)).status, 403, u);
     assert.strictEqual((await api(base, 'GET', '/api/qris')).status, 200);
@@ -398,6 +423,9 @@ test('local files: projects, payments, photos, reports, and the other JSON store
 
     // back to superadmin (its session is still valid)
     jar.cookie = saCookie;
+    assert.strictEqual((await api(base, 'DELETE', '/api/users/pelanggan')).status, 200);
+    const relinked = (await api(base, 'GET', '/api/projects')).data.find(p => p.id === own.data.id);
+    assert.deepStrictEqual(relinked.customers, [], 'deleting a customer unlinks it');
     const pay = await api(base, 'PUT', '/api/paymeta', { an: 'Kudostack Uji', lokasi: { alamat: 'Jl. Uji', lat: -7.1, lng: 109.2, catatan: 'dekat' } });
     assert.strictEqual(pay.status, 200);
     const payGet = await api(base, 'GET', '/api/paymeta');

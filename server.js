@@ -10,8 +10,9 @@ const {
   uploadObject, removeStored, usingRemote, usingCloudflare, getObject, initPersistence,
   createSession, getSession, deleteSession, deleteUserSessions, rateHit, rateGet, rateClear,
   addAudit, listAudit, storageInfo, cfEnv,
-  UPLOADS_DIR, ADMIN_WA
+  UPLOADS_DIR, DATA_DIR, ADMIN_WA
 } = require('./db');
+const { xlsx } = require('./xlsx');
 const auth = require('./auth');
 const backup = require('./backup');
 
@@ -82,6 +83,13 @@ const ACCESS = [
   ['GET', /^\/api\/stats$/, STAFF],
   // Customers may download the nota of a project linked to them (checked in the route).
   ['GET', /^\/api\/pdf\/project\/[^/]+$/, [...WORK, 'customer']],
+  // F7: payments change money, so superadmin only (like bayar); invoices for Kas roles and the linked customer.
+  ['*', /^\/api\/projects\/[^/]+\/payments(\/|$)/, SA],
+  ['GET', /^\/api\/pdf\/invoice\/[^/]+\/[^/]+$/, [...FIN, 'customer']],
+  // F14: attachments for the people who work on the project.
+  ['*', /^\/api\/projects\/[^/]+\/files(\/|$)/, WORK],
+  ['GET', /^\/api\/reminders$/, STAFF],
+  ['GET', /^\/api\/reports\//, FIN],
   ['GET', /^\/api\/pdf\//, FIN],
   ['GET', /^\/api\/export\//, FIN],
   ['POST', /^\/api\/send-wa$/, WORK],
@@ -187,6 +195,8 @@ if (EMBEDDED) {
     res.send(Buffer.from(a.b64, 'base64'));
   });
   app.get(/^\/files\/.+/, filesGate, async (req, res) => {
+    // Attachments (F14) are only served through the per-project route, which checks access.
+    if (/^\/files\/docs(\/|%2f)/i.test(req.path)) return res.status(404).send('Not found');
     const stored = await getObject(req.path);
     if (!stored) return res.status(404).send('Not found');
     res.set('Content-Type', stored.contentType);
@@ -431,7 +441,11 @@ const visibleProjects = (user, list) => list.filter(p => canSeeProject(user, p))
 // Customers get their own project's progress and bill only: no phone numbers,
 // photos, signatures, technician notes, or the list of linked accounts.
 const CUSTOMER_FIELDS = ['id', 'tgl', 'nama', 'layanan', 'pic', 'status', 'bayar', 'biaya', 'diagnosis', 'output', 'garansiNum', 'garansiUnit', 'garansiAkhir'];
-const customerView = p => Object.fromEntries(CUSTOMER_FIELDS.map(k => [k, p[k]]));
+const customerView = p => ({
+  ...Object.fromEntries(CUSTOMER_FIELDS.map(k => [k, p[k]])),
+  pembayaran: (p.pembayaran || []).map(({ id, no, tgl, jenis, nominal }) => ({ id, no, tgl, jenis, nominal }))
+});
+const paidOf = p => (p.pembayaran || []).reduce((s, x) => s + Number(x.nominal || 0), 0);
 
 // Returns { list } or { error }. Only accounts with role customer can be linked.
 async function checkCustomers(value) {
@@ -475,7 +489,8 @@ app.get('/api/projects', async (req, res) => {
   const db = await load();
   const list = filterProjects(visibleProjects(req.user, db.projects), req.query).sort((a, b) => b.id.localeCompare(a.id));
   const out = pageOf(res, list, req.query);
-  res.json(req.user.role === 'customer' ? out.map(customerView) : out);
+  const noUrls = p => (p.lampiran ? { ...p, lampiran: p.lampiran.map(({ url, ...rest }) => rest) } : p);
+  res.json(req.user.role === 'customer' ? out.map(customerView) : out.map(noUrls));
 });
 
 // Superadmin/admin link customer accounts to a project.
@@ -550,13 +565,15 @@ app.put('/api/projects/:id', async (req, res) => {
     if (project.status === 'Selesai / Closing' && prevStatus !== 'Selesai / Closing' && project.garansiNum > 0 && !project.garansiAkhir)
       project.garansiAkhir = addPeriode(new Date().toISOString().slice(0, 10), project.garansiNum, project.garansiUnit);
     if (project.status !== 'Selesai / Closing') project.garansiAkhir = '';
-    if (prevBayar !== 'Lunas' && project.bayar === 'Lunas') {
+    // Recorded payments (F7) already created their Kas rows: book only what is left.
+    const rest = project.biaya - paidOf(project);
+    if (prevBayar !== 'Lunas' && project.bayar === 'Lunas' && rest > 0) {
       db.transactions.push({
         id: 'TRX-' + String(db.counters.trx++).padStart(3, '0'),
         tgl: new Date().toISOString().slice(0, 10),
         jenis: 'Uang Masuk',
         kategori: project.layanan === 'DLL' ? 'DLL' : project.layanan,
-        nominal: project.biaya, pic: project.pic,
+        nominal: rest, pic: project.pic,
         ket: `Pembayaran lunas ${project.id} — ${project.nama}`
       });
     }
@@ -650,6 +667,244 @@ app.delete('/api/transactions/:id', async (req, res) => {
     db.transactions.splice(i, 1);
   });
   if (missing) return res.status(404).json({ error: 'Tidak ditemukan' });
+  res.json({ ok: true });
+});
+
+/* ================= F7: PEMBAYARAN BERTAHAP + INVOICE ================= */
+// Each payment gets an invoice number INV-YYYYMM-NNNN, a Kas row (Uang Masuk),
+// and moves bayar to DP or Lunas. Superadmin only, like bayar itself.
+const PAY_JENIS = ['DP', 'Termin', 'Pelunasan'];
+const today = () => new Date().toISOString().slice(0, 10);
+const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+const addDays = (d, n) => new Date(Date.parse(d + 'T00:00:00Z') + n * DAY).toISOString().slice(0, 10);
+const bayarFor = p => { const s = paidOf(p); return s <= 0 ? 'Belum Bayar' : s >= p.biaya ? 'Lunas' : 'DP'; };
+
+app.post('/api/projects/:id/payments', async (req, res) => {
+  const b = req.body || {};
+  const nominal = Math.round(Number(b.nominal));
+  if (!PAY_JENIS.includes(b.jenis)) return res.status(400).json({ error: 'Jenis harus DP, Termin, atau Pelunasan' });
+  if (!(nominal > 0)) return res.status(400).json({ error: 'Nominal harus lebih dari 0' });
+  const tgl = isDate(b.tgl) ? b.tgl : today();
+  let missing = false, over = false;
+  const r = await update(db => {
+    const p = db.projects.find(x => x.id === req.params.id);
+    if (!p) { missing = true; return null; }
+    if (paidOf(p) + nominal > p.biaya) { over = true; return null; }
+    db.counters.invoice = db.counters.invoice || 1;
+    const no = 'INV-' + tgl.slice(0, 7).replace('-', '') + '-' + String(db.counters.invoice++).padStart(4, '0');
+    const trxId = 'TRX-' + String(db.counters.trx++).padStart(3, '0');
+    db.transactions.push({ id: trxId, tgl, jenis: 'Uang Masuk', kategori: p.layanan === 'DLL' ? 'DLL' : p.layanan, nominal, pic: p.pic, ket: `${b.jenis} ${no} ${p.id} — ${p.nama}` });
+    const pay = { id: 'PAY-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), no, tgl, jenis: b.jenis, nominal, ket: String(b.ket || '').slice(0, 200), trxId, oleh: req.user.username };
+    const before = p.bayar;
+    p.pembayaran = [...(p.pembayaran || []), pay];
+    p.bayar = bayarFor(p);
+    return { pay, before, bayar: p.bayar, terbayar: paidOf(p), sisa: p.biaya - paidOf(p) };
+  });
+  if (missing) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
+  if (over) return res.status(400).json({ error: 'Total pembayaran melebihi biaya proyek' });
+  await audit(req, 'project.payment', req.params.id, { before: r.before, after: { bayar: r.bayar, invoice: r.pay.no, nominal: r.pay.nominal, jenis: r.pay.jenis } });
+  res.json(r);
+});
+
+app.delete('/api/projects/:id/payments/:pid', async (req, res) => {
+  let missing = false;
+  const r = await update(db => {
+    const p = db.projects.find(x => x.id === req.params.id);
+    const pay = p && (p.pembayaran || []).find(x => x.id === req.params.pid);
+    if (!pay) { missing = true; return null; }
+    const before = p.bayar;
+    p.pembayaran = p.pembayaran.filter(x => x !== pay);
+    db.transactions = db.transactions.filter(t => t.id !== pay.trxId);
+    p.bayar = bayarFor(p);
+    return { pay, before, bayar: p.bayar };
+  });
+  if (missing) return res.status(404).json({ error: 'Pembayaran tidak ditemukan' });
+  await audit(req, 'project.payment.delete', req.params.id, { before: { bayar: r.before, invoice: r.pay.no, nominal: r.pay.nominal }, after: { bayar: r.bayar } });
+  res.json({ ok: true, bayar: r.bayar });
+});
+
+app.get('/api/pdf/invoice/:id/:pid', async (req, res) => {
+  const db = await load();
+  const p = db.projects.find(x => x.id === req.params.id);
+  if (!p || !canSeeProject(req.user, p)) return res.status(404).json({ error: 'not found' });
+  const list = p.pembayaran || [];
+  const i = list.findIndex(x => x.id === req.params.pid);
+  if (i < 0) return res.status(404).json({ error: 'not found' });
+  const pay = list[i];
+  const upTo = list.slice(0, i + 1).reduce((s, x) => s + x.nominal, 0);
+  const doc = new PDFDocument({ margin: 50, size: 'A4' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${pay.no}.pdf"`);
+  doc.pipe(res);
+  kop(doc, `INVOICE / KUITANSI — ${pay.no}`);
+  [['Nomor Invoice', pay.no], ['Tanggal Bayar', pay.tgl], ['Jenis Pembayaran', pay.jenis],
+   ['Proyek', `${p.id} — ${p.nama}`], ['Layanan', p.layanan], ['Klien', p.klien || '-'],
+   ['Nominal Dibayar', rupiah(pay.nominal)], ['Total Biaya Proyek', rupiah(p.biaya)],
+   ['Total Terbayar s.d. invoice ini', rupiah(upTo)], ['Sisa Tagihan', rupiah(Math.max(0, p.biaya - upTo))],
+   ['Keterangan', pay.ket || '-']].forEach(([k, v]) => {
+    doc.font('Helvetica-Bold').fontSize(10).fillColor('#7a4b8f').text(k, 50, doc.y + 4, { width: 190 });
+    doc.font('Helvetica').fontSize(10).fillColor(C.ink).text(String(v), 250, doc.y, { width: 295 });
+    doc.moveDown(0.5);
+  });
+  doc.moveDown(1);
+  doc.roundedRect(50, doc.y, 495, 30, 8).fill(upTo >= p.biaya ? C.greenSoft : C.blueSoft);
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(C.ink).text(upTo >= p.biaya ? 'STATUS: LUNAS' : `STATUS: ${pay.jenis.toUpperCase()} — sisa ${rupiah(p.biaya - upTo)}`, 62, doc.y + 10);
+  footerNote(doc); doc.end();
+});
+
+/* ================= F9: PENGINGAT (dashboard only, nothing is sent) ================= */
+app.get('/api/reminders', async (req, res) => {
+  const t = today(), in14 = addDays(t, 14), in3 = addDays(t, 3);
+  const db = await load();
+  const ps = visibleProjects(req.user, db.projects);
+  const fin = FIN.includes(req.user.role);
+  const items = [];
+  for (const p of ps) {
+    if (p.status === 'Selesai / Closing' && p.garansiAkhir && p.garansiAkhir >= t && p.garansiAkhir <= in14)
+      items.push({ type: 'garansi', id: p.id, date: p.garansiAkhir, text: `Garansi ${p.id} — ${p.nama} berakhir ${p.garansiAkhir}` });
+    if (p.bayar !== 'Lunas' && ['Selesai / Closing', 'Menunggu Pembayaran'].includes(p.status))
+      items.push({ type: 'tagihan', id: p.id, date: p.tgl, text: `Tagihan ${p.id} — ${p.nama} belum lunas` + (fin ? ` (sisa ${rupiah(p.biaya - paidOf(p))})` : '') });
+  }
+  if (CONTENT.includes(req.user.role)) {
+    for (const c of await getPlans()) {
+      if (c.status !== 'Tayang' && c.tanggal <= in3)
+        items.push({ type: 'konten', id: c.id, date: c.tanggal, text: `${c.tanggal < t ? 'Terlewat' : 'Segera tayang'}: ${c.judul} (${c.tanggal}, ${c.status})` });
+      if (c.status === 'Review' && MGR.includes(req.user.role))
+        items.push({ type: 'persetujuan', id: c.id, date: c.tanggal, text: `Menunggu persetujuan: ${c.judul} (${c.tanggal})` });
+    }
+  }
+  items.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  res.json(items);
+});
+
+/* ================= F12: LAPORAN LABA ================= */
+// Per Kas category (Hardware/Software/DLL are the services, so their row is the
+// service profit) and per PIC from project values and recorded payments.
+function profitReport(db, q) {
+  const dari = isDate(q.dari) ? q.dari : '', sampai = isDate(q.sampai) ? q.sampai : '';
+  const inRange = d => (!dari || d >= dari) && (!sampai || d <= sampai);
+  const kat = {};
+  for (const t of db.transactions.filter(x => inRange(x.tgl))) {
+    const k = kat[t.kategori] = kat[t.kategori] || { kategori: t.kategori, masuk: 0, keluar: 0 };
+    if (t.jenis === 'Uang Masuk') k.masuk += t.nominal; else k.keluar += t.nominal;
+  }
+  ['Hardware', 'Software', 'DLL'].forEach(l => { kat[l] = kat[l] || { kategori: l, masuk: 0, keluar: 0 }; });
+  const perKategori = Object.values(kat).map(k => ({ ...k, laba: k.masuk - k.keluar, layanan: ['Hardware', 'Software', 'DLL'].includes(k.kategori) }))
+    .sort((a, b) => (b.layanan - a.layanan) || a.kategori.localeCompare(b.kategori));
+  const pic = {};
+  for (const p of db.projects.filter(x => inRange(x.tgl))) {
+    const r = pic[p.pic] = pic[p.pic] || { pic: p.pic, proyek: 0, nilai: 0, terbayar: 0 };
+    r.proyek++; r.nilai += p.biaya;
+    r.terbayar += p.bayar === 'Lunas' ? p.biaya : paidOf(p);
+  }
+  const perPic = Object.values(pic).map(r => ({ ...r, piutang: r.nilai - r.terbayar })).sort((a, b) => b.nilai - a.nilai);
+  const masuk = perKategori.reduce((s, k) => s + k.masuk, 0), keluar = perKategori.reduce((s, k) => s + k.keluar, 0);
+  return { dari, sampai, perKategori, perPic, total: { masuk, keluar, laba: masuk - keluar } };
+}
+app.get('/api/reports/profit', async (req, res) => res.json(profitReport(await load(), req.query)));
+
+/* ================= F13: EXPORT EXCEL ================= */
+const sendXlsx = (res, filename, sheet, headers, rows) => {
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(xlsx(sheet, headers, rows));
+};
+app.get('/api/export/projects.xlsx', async (req, res) => {
+  const db = await load();
+  sendXlsx(res, 'Kudostack-Proyek.xlsx', 'Proyek',
+    ['ID', 'Tanggal', 'Nama Proyek', 'Layanan', 'PIC', 'Klien', 'No WA', 'Biaya', 'Terbayar', 'Status Bayar', 'Status Pengerjaan', 'Input dari Klien', 'Diagnosis Awal', 'Output / Hasil', 'Laporan Teknisi', 'Garansi', 'Garansi s.d.', 'Akun Customer'],
+    db.projects.map(p => [p.id, p.tgl, p.nama, p.layanan, p.pic, p.klien, p.wa, p.biaya, p.bayar === 'Lunas' ? p.biaya : paidOf(p), p.bayar, p.status,
+      p.input, p.diagnosis, p.output, p.reportTeknisi, p.garansiNum ? `${p.garansiNum} ${p.garansiUnit}` : '', p.garansiAkhir, (p.customers || []).join(', ')]));
+});
+app.get('/api/export/transactions.xlsx', async (req, res) => {
+  const db = await load();
+  sendXlsx(res, 'Kudostack-Keuangan.xlsx', 'Keuangan', ['ID', 'Tanggal', 'Jenis', 'Kategori', 'Nominal', 'PIC', 'Keterangan'],
+    filterTransactions(db.transactions.slice().sort((a, b) => a.tgl.localeCompare(b.tgl)), req.query).map(t => [t.id, t.tgl, t.jenis, t.kategori, t.nominal, t.pic, t.ket]));
+});
+
+/* ================= F14: LAMPIRAN DOKUMEN ================= */
+// Stored outside the public photo paths: KV "docs/..." (never served by /files),
+// Supabase Storage, or DATA_DIR/docs locally. Served only through the project
+// route after the session and project-access checks, as an attachment.
+const docUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+const OFFICE = { '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+const SNIFF_EXT = { 'application/pdf': '.pdf', 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
+const LOCAL_DOCS = () => path.join(DATA_DIR, 'docs');
+function docType(buf, name) {
+  const t = sniffType(buf);
+  if (SNIFF_EXT[t]) return { type: t, ext: SNIFF_EXT[t] };
+  const ext = path.extname(name || '').toLowerCase();
+  if (t === 'application/zip' && OFFICE[ext]) return { type: OFFICE[ext], ext };
+  return null;
+}
+const cleanName = n => String(path.basename(String(n || 'dokumen'))).replace(/[\u0000-\u001f"\\/]/g, '').slice(0, 120) || 'dokumen';
+
+app.post('/api/projects/:id/files', docUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Tidak ada file' });
+  const db0 = await load();
+  if (!canSeeProject(req.user, db0.projects.find(x => x.id === req.params.id))) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
+  const kind = docType(req.file.buffer, req.file.originalname);
+  if (!kind) return res.status(400).json({ error: 'Hanya PDF, JPG, PNG, WEBP, DOCX, XLSX, PPTX (isi file dicek)' });
+  const fid = 'DOC-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  let url;
+  if (usingRemote()) url = await uploadObject(`docs/${safeId(req.params.id)}/${fid}${kind.ext}`, req.file.buffer, kind.type);
+  else {
+    fs.mkdirSync(LOCAL_DOCS(), { recursive: true });
+    fs.writeFileSync(path.join(LOCAL_DOCS(), fid + kind.ext), req.file.buffer);
+    url = 'local-doc:' + fid + kind.ext;
+  }
+  const item = { id: fid, name: cleanName(req.file.originalname), type: kind.type, size: req.file.size, url, by: req.user.username, at: new Date().toISOString() };
+  let missing = false;
+  await update(db => {
+    const p = db.projects.find(x => x.id === req.params.id);
+    if (!p || !canSeeProject(req.user, p)) { missing = true; return; }
+    p.lampiran = [...(p.lampiran || []), item];
+  });
+  if (missing) { await removeDoc(url); return res.status(404).json({ error: 'Proyek tidak ditemukan' }); }
+  const { url: _hidden, ...pub } = item;
+  res.json(pub);
+});
+
+async function removeDoc(url) {
+  if (String(url).startsWith('local-doc:')) {
+    const f = path.join(LOCAL_DOCS(), path.basename(url.slice('local-doc:'.length)));
+    try { fs.unlinkSync(f); } catch (e) {}
+    return;
+  }
+  await removeStored(url);
+}
+async function readDoc(url) {
+  if (String(url).startsWith('local-doc:')) {
+    const f = path.join(LOCAL_DOCS(), path.basename(url.slice('local-doc:'.length)));
+    return fs.existsSync(f) ? fs.readFileSync(f) : null;
+  }
+  if (usingCloudflare()) { const o = await getObject(url); return o ? o.body : null; }
+  const r = await fetch(url);
+  return r.ok ? Buffer.from(await r.arrayBuffer()) : null;
+}
+
+app.get('/api/projects/:id/files/:fid', async (req, res) => {
+  const p = (await load()).projects.find(x => x.id === req.params.id);
+  const item = p && canSeeProject(req.user, p) && (p.lampiran || []).find(x => x.id === req.params.fid);
+  if (!item) return res.status(404).json({ error: 'Lampiran tidak ditemukan' });
+  const body = await readDoc(item.url);
+  if (!body) return res.status(404).json({ error: 'File tidak ada di penyimpanan' });
+  res.set('Content-Type', item.type);
+  res.set('Content-Disposition', `attachment; filename="${item.name.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(item.name)}`);
+  res.set('Content-Security-Policy', 'sandbox');
+  res.send(body);
+});
+
+app.delete('/api/projects/:id/files/:fid', async (req, res) => {
+  let gone = null;
+  await update(db => {
+    const p = db.projects.find(x => x.id === req.params.id);
+    if (!p || !canSeeProject(req.user, p)) return;
+    gone = (p.lampiran || []).find(x => x.id === req.params.fid) || null;
+    if (gone) p.lampiran = p.lampiran.filter(x => x !== gone);
+  });
+  if (!gone) return res.status(404).json({ error: 'Lampiran tidak ditemukan' });
+  await removeDoc(gone.url);
   res.json({ ok: true });
 });
 
@@ -1138,6 +1393,9 @@ app.get('/api/send-wa/outbox', async (req, res) => {
 
 /* ================= CONTENT PLANNER (kalender konten medsos) ================= */
 const getPlans = () => readOrSeed('plans', () => []);
+// F11: Draft -> Review -> Disetujui (or Ditolak) -> Tayang. medsos drafts and
+// submits; superadmin/admin approve. Approving records who and when.
+const PLAN_STATUS = ['Draft', 'Review', 'Disetujui', 'Ditolak', 'Tayang'];
 
 app.get('/api/plans', async (req, res) => res.json(await getPlans()));
 app.post('/api/plans', async (req, res) => {
@@ -1157,17 +1415,34 @@ app.post('/api/plans', async (req, res) => {
   res.json(item);
 });
 app.put('/api/plans/:id', async (req, res) => {
-  let missing = false, saved = null;
+  let missing = false, saved = null, bad = null, denied = null;
   await updateDoc('plans', () => [], (plans) => {
     const list = Array.isArray(plans) ? plans : [];
     const p = list.find(x => x.id === req.params.id);
     if (!p) { missing = true; return list; }
-    const allow = ['tanggal', 'judul', 'platform', 'brief', 'prompt', 'caption', 'status'];
-    allow.forEach(k => { if (req.body[k] !== undefined) p[k] = req.body[k]; });
+    const b = req.body || {};
+    const mgr = MGR.includes(req.user.role);
+    if (b.status !== undefined && b.status !== p.status) {
+      if (!PLAN_STATUS.includes(b.status)) { bad = 'Status harus salah satu: ' + PLAN_STATUS.join(', '); return list; }
+      if (['Disetujui', 'Ditolak'].includes(b.status) && !mgr) { denied = 'Hanya superadmin/admin yang bisa menyetujui atau menolak konten'; return list; }
+      if (b.status === 'Tayang' && p.status !== 'Disetujui' && !mgr) { denied = 'Konten harus disetujui dulu sebelum tayang'; return list; }
+    }
+    const content = ['tanggal', 'judul', 'platform', 'brief', 'prompt', 'caption'];
+    const edited = content.some(k => b[k] !== undefined && b[k] !== p[k]);
+    content.forEach(k => { if (b[k] !== undefined) p[k] = b[k]; });
+    if (b.status !== undefined && b.status !== p.status) {
+      p.status = b.status;
+      if (['Disetujui', 'Ditolak'].includes(b.status)) { p.disetujuiOleh = req.user.username; p.disetujuiPada = new Date().toISOString(); }
+    } else if (edited && !mgr && ['Disetujui', 'Ditolak'].includes(p.status)) {
+      // F11: content changed after review goes back to review.
+      p.status = 'Review';
+    }
     saved = p;
     return list;
   });
   if (missing) return res.status(404).json({ error: 'Tidak ditemukan' });
+  if (bad) return res.status(400).json({ error: bad });
+  if (denied) return res.status(403).json({ error: denied });
   res.json(saved);
 });
 app.delete('/api/plans/:id', async (req, res) => {

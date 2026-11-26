@@ -369,8 +369,10 @@ test('local files: projects, payments, photos, reports, and the other JSON store
     const planOk = await api(base, 'POST', '/api/plans', { tanggal: '2026-11-12', judul: 'Before after', platform: 'Instagram', caption: 'halo' });
     assert.strictEqual(planOk.status, 200);
     assert.strictEqual(planOk.data.dibuat, 'admin');
-    const planPut = await api(base, 'PUT', '/api/plans/' + planOk.data.id, { status: 'Terjadwal' });
-    assert.strictEqual(planPut.data.status, 'Terjadwal');
+    assert.strictEqual((await api(base, 'PUT', '/api/plans/' + planOk.data.id, { status: 'Terjadwal' })).status, 400, 'F11 unknown status');
+    const planPut = await api(base, 'PUT', '/api/plans/' + planOk.data.id, { status: 'Disetujui' });
+    assert.strictEqual(planPut.data.status, 'Disetujui');
+    assert.strictEqual(planPut.data.disetujuiOleh, 'admin');
     assert.strictEqual((await api(base, 'DELETE', '/api/plans/' + planOk.data.id)).status, 200);
 
     // anggota (teknisi): projects yes, Kas/plans/exports no, finance hidden in stats
@@ -404,6 +406,11 @@ test('local files: projects, payments, photos, reports, and the other JSON store
     assert.strictEqual((await api(base, 'PUT', '/api/projects/' + second.data.id, { output: 'x' })).status, 403);
     const plan = await api(base, 'POST', '/api/plans', { tanggal: '2026-11-12', judul: 'Before after', platform: 'Instagram' });
     assert.strictEqual(plan.status, 200);
+    // F11: medsos submits, cannot approve or publish unapproved content
+    assert.strictEqual((await api(base, 'PUT', '/api/plans/' + plan.data.id, { status: 'Tayang' })).status, 403);
+    assert.strictEqual((await api(base, 'PUT', '/api/plans/' + plan.data.id, { status: 'Disetujui' })).status, 403);
+    assert.strictEqual((await api(base, 'PUT', '/api/plans/' + plan.data.id, { status: 'Review' })).data.status, 'Review');
+    assert.ok((await api(base, 'GET', '/api/reminders')).data.some(r => r.type === 'konten' && r.id === plan.data.id), 'F9 overdue content reminder');
 
     // customer: trimmed projects, nothing else private
     await loginAs(base, 'pelanggan', 'pelanggan-pass-123');
@@ -462,6 +469,59 @@ test('local files: projects, payments, photos, reports, and the other JSON store
     assert.ok(log.some(e => e.action === 'project.bayar'), 'bayar changes are audited too');
     const qrisGot = await af(base + '/qris.jpg?v=1');
     assert.deepStrictEqual(Buffer.from(await qrisGot.arrayBuffer()), PNG);
+
+    // F11: admin side of the approval flow; edits after approval go back to review
+    const plans = (await api(base, 'GET', '/api/plans')).data;
+    const rv = plans.find(p => p.status === 'Review');
+    assert.ok((await api(base, 'GET', '/api/reminders')).data.some(r => r.type === 'persetujuan' && r.id === rv.id));
+    assert.strictEqual((await api(base, 'PUT', '/api/plans/' + rv.id, { status: 'Disetujui' })).data.status, 'Disetujui');
+
+    // F7: staged payments with numbered invoices
+    const pj = await api(base, 'POST', '/api/projects', { nama: 'Termin', layanan: 'Software', pic: 'Dina', biaya: 1000000 });
+    const before = (await api(base, 'GET', '/api/transactions')).data.length;
+    assert.strictEqual((await api(base, 'POST', `/api/projects/${pj.data.id}/payments`, { jenis: 'Cicil', nominal: 1 })).status, 400);
+    const dp = await api(base, 'POST', `/api/projects/${pj.data.id}/payments`, { jenis: 'DP', nominal: 400000, tgl: '2026-11-20' });
+    assert.strictEqual(dp.status, 200, dp.text);
+    assert.match(dp.data.pay.no, /^INV-202611-\d{4}$/);
+    assert.strictEqual(dp.data.bayar, 'DP');
+    assert.strictEqual((await api(base, 'POST', `/api/projects/${pj.data.id}/payments`, { jenis: 'Pelunasan', nominal: 700000 })).status, 400, 'over-payment refused');
+    const pel = await api(base, 'POST', `/api/projects/${pj.data.id}/payments`, { jenis: 'Pelunasan', nominal: 600000 });
+    assert.strictEqual(pel.data.bayar, 'Lunas');
+    assert.notStrictEqual(pel.data.pay.no, dp.data.pay.no);
+    const trxNow = (await api(base, 'GET', '/api/transactions')).data;
+    assert.strictEqual(trxNow.length, before + 2, 'one Kas row per payment');
+    assert.ok(trxNow.some(t => t.nominal === 400000 && t.ket.includes(dp.data.pay.no)));
+    const inv = await af(base + `/api/pdf/invoice/${pj.data.id}/${dp.data.pay.id}`);
+    assert.strictEqual(Buffer.from(await inv.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+    assert.strictEqual((await api(base, 'DELETE', `/api/projects/${pj.data.id}/payments/${pel.data.pay.id}`)).data.bayar, 'DP');
+    assert.strictEqual((await api(base, 'GET', '/api/transactions')).data.length, before + 1);
+    // manual Lunas after a DP books only the remainder
+    await api(base, 'PUT', '/api/projects/' + pj.data.id, { bayar: 'Lunas' });
+    assert.ok((await api(base, 'GET', '/api/transactions')).data.some(t => t.nominal === 600000 && t.ket.includes(pj.data.id)));
+
+    // F12 profit report, F13 Excel
+    const rep = (await api(base, 'GET', '/api/reports/profit?dari=2026-11-01')).data;
+    assert.ok(rep.perKategori.find(k => k.kategori === 'Software').masuk >= 1000000);
+    assert.ok(rep.perPic.find(r => r.pic === 'Dina').terbayar >= 1000000);
+    assert.strictEqual(rep.total.laba, rep.total.masuk - rep.total.keluar);
+    const xl = Buffer.from(await (await af(base + '/api/export/projects.xlsx')).arrayBuffer());
+    assert.strictEqual(xl.subarray(0, 2).toString(), 'PK');
+    assert.ok(xl.length > 500);
+
+    // F14 attachments: content checked, served only through the project route
+    const up = async (name, buf, type) => { const fd = new FormData(); fd.append('file', new Blob([buf], { type }), name); const r = await af(base + `/api/projects/${pj.data.id}/files`, { method: 'POST', body: fd }); return { status: r.status, data: await r.json() }; };
+    assert.strictEqual((await up('virus.pdf', Buffer.from('MZ not a pdf'), 'application/pdf')).status, 400);
+    const pdfDoc = await up('Surat jalan.pdf', Buffer.from('%PDF-1.4 test'), 'application/pdf');
+    assert.strictEqual(pdfDoc.status, 200, JSON.stringify(pdfDoc.data));
+    assert.strictEqual(pdfDoc.data.url, undefined);
+    const listed = (await api(base, 'GET', '/api/projects')).data.find(p => p.id === pj.data.id);
+    assert.ok(listed.lampiran.length === 1 && listed.lampiran[0].url === undefined);
+    const got = await af(base + `/api/projects/${pj.data.id}/files/${pdfDoc.data.id}`);
+    assert.strictEqual(got.status, 200);
+    assert.match(got.headers.get('content-disposition'), /attachment/);
+    assert.strictEqual(Buffer.from(await got.arrayBuffer()).toString(), '%PDF-1.4 test');
+    assert.strictEqual((await api(base, 'DELETE', `/api/projects/${pj.data.id}/files/${pdfDoc.data.id}`)).status, 200);
+    assert.strictEqual((await af(base + `/api/projects/${pj.data.id}/files/${pdfDoc.data.id}`)).status, 404);
 
     // login rate limit (per username)
     let last;

@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Kudostack Admin Hub</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#ffd60a">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="icon" type="image/jpeg" href="/logo.jpg">
 <style>
 :root{
@@ -264,6 +267,7 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
     </div>
     <div class="panel" id="layananPanel"><h3>📊 Ringkasan Layanan & Omzet</h3><div class="tbl-wrap"><table id="tLayanan"></table></div></div>
   </div>
+  <div class="panel" id="remPanel" style="display:none"><h3>Pengingat</h3><div id="remList"></div></div>
   <div class="panel" id="berjalanPanel"><h3>🚀 Proyek Sedang Berjalan</h3><div class="tbl-wrap"><table id="tBerjalan"></table></div></div>
 </div>
 
@@ -307,6 +311,15 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
       </div>
     </form>
   </div>
+  <div class="flex" id="projFilter" style="margin:14px 0 10px;flex-wrap:wrap;gap:8px">
+    <input id="fpQ" placeholder="Cari ID, nama, klien, PIC" style="max-width:240px" onkeydown="if(event.key==='Enter')renderProj()">
+    <select id="fpStatus" style="width:auto"><option value="">Semua Status</option><option>Baru Masuk</option><option>Sedang Dikerjakan</option><option>Menunggu Pembayaran</option><option>Selesai / Closing</option><option>Komplain / Kendala</option></select>
+    <select id="fpBayar" style="width:auto"><option value="">Semua Bayar</option><option>Belum Bayar</option><option>DP</option><option>Lunas</option></select>
+    <select id="fpLayanan" style="width:auto"><option value="">Semua Layanan</option><option>Hardware</option><option>Software</option><option>DLL</option></select>
+    <button class="btn pink sm" onclick="renderProj()">Cari</button>
+    <button class="btn sm" onclick="resetProjFilter()">Reset</button>
+    <small id="fpCount" style="color:#666"></small>
+  </div>
   <div class="tbl-wrap"><table id="tProj"></table></div>
 </div>
 
@@ -330,11 +343,24 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
   <div class="flex" style="margin-bottom:10px">
     <select id="fltJenis" style="width:auto"><option value="">Semua Jenis</option><option>Uang Masuk</option><option>Uang Keluar</option></select>
     <select id="fltKat" style="width:auto"><option value="">Semua Kategori</option><option>Hardware</option><option>Software</option><option>DLL</option><option>Operasional</option></select>
+    <input id="fltQ" placeholder="Cari keterangan, PIC, ID" style="width:auto" onkeydown="if(event.key==='Enter')renderTrx()">
     <input type="date" id="fltDari" style="width:auto" title="Dari tanggal">
     <input type="date" id="fltSampai" style="width:auto" title="Sampai tanggal">
     <button class="btn pink sm" onclick="renderTrx()">🔄 Filter</button>
   </div>
   <div class="tbl-wrap"><table id="tTrx"></table></div>
+  <div class="panel" id="labaPanel" style="margin-top:14px">
+    <h3>Laporan laba per layanan dan PIC</h3>
+    <p style="font-size:.78rem;color:#666;margin:4px 0 8px">Laba layanan = uang masuk dikurangi uang keluar berkategori layanan itu. Per PIC: nilai proyek, yang sudah dibayar, dan sisa tagihan.</p>
+    <div class="flex" style="gap:8px;flex-wrap:wrap">
+      <input type="date" id="lbDari" style="width:auto" title="Dari tanggal">
+      <input type="date" id="lbSampai" style="width:auto" title="Sampai tanggal">
+      <button class="btn pink sm" onclick="renderProfit()">Tampilkan</button>
+      <button class="btn sm" onclick="dl('/api/export/transactions.xlsx')">Keuangan Excel</button>
+    </div>
+    <div class="tbl-wrap" style="margin-top:10px"><table id="tLaba"></table></div>
+    <div class="tbl-wrap" style="margin-top:10px"><table id="tLabaPic"></table></div>
+  </div>
 </div>
 
 <div class="page" id="p-planner">
@@ -446,6 +472,8 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
     <div class="flex" style="gap:8px">
       <button class="btn blue" onclick="dl('/api/export/projects.csv')">⬇ Proyek CSV</button>
       <button class="btn blue" onclick="dl('/api/export/transactions.csv')">⬇ Keuangan CSV</button>
+      <button class="btn blue" onclick="dl('/api/export/projects.xlsx')">Proyek Excel</button>
+      <button class="btn blue" onclick="dl('/api/export/transactions.xlsx')">Keuangan Excel</button>
       <button class="btn" onclick="dl('/api/export/projects.json')">⬇ Proyek JSON</button>
       <button class="btn" onclick="dl('/api/export/transactions.json')">⬇ Keuangan JSON</button>
     </div></div>
@@ -527,7 +555,7 @@ const esc=s=>String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 // Session cookie is HttpOnly; a 401 from the API means it expired or was revoked.
 const _fetch=window.fetch.bind(window);
 window.fetch=async(u,o)=>{const r=await _fetch(u,o);if(r.status===401&&ME&&typeof u==='string'&&u.startsWith('/api/')&&u!=='/api/login'){ME=null;toast('Sesi berakhir, silakan login lagi');setTimeout(()=>location.reload(),1200);}return r;};
-const can={link:r=>['superadmin','admin'].includes(r),fin:r=>['superadmin','admin'].includes(r),staff:r=>r!=='customer',payEdit:r=>r==='superadmin',bayar:r=>r==='superadmin'};
+const can={work:r=>['superadmin','admin','anggota'].includes(r),link:r=>['superadmin','admin'].includes(r),fin:r=>['superadmin','admin'].includes(r),staff:r=>r!=='customer',payEdit:r=>r==='superadmin',bayar:r=>r==='superadmin'};
 let PWD_TARGET=null;
 function openPwd(user){PWD_TARGET=user||null;$('#pwdTitle').textContent=user?'Atur password untuk '+user:'Ganti password';$('#pwdUser').value=user||ME.username;$('#pwdCurWrap').style.display=user?'none':'block';['#pwdCur','#pwdNew','#pwdNew2'].forEach(k=>$(k).value='');$('#pwdErr').textContent='';$('#pwdBox').style.display='flex';}
 function closePwd(){$('#pwdBox').style.display='none';['#pwdCur','#pwdNew','#pwdNew2'].forEach(k=>$(k).value='');}
@@ -598,7 +626,7 @@ $$('nav button').forEach(b=>b.onclick=()=>{
   $$('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
   $$('.page').forEach(p=>p.classList.remove('on'));
   $('#p-'+b.dataset.p).classList.add('on');
-  ({home:renderHome,proyek:renderProj,kas:()=>{renderTrx();renderKasCards();},wa:renderWA,planner:renderPlanner,sosmed:renderSM,pdf:renderPdfSel,users:renderUsers})[b.dataset.p]?.();
+  ({home:renderHome,proyek:renderProj,kas:()=>{renderTrx();renderKasCards();renderProfit();},wa:renderWA,planner:renderPlanner,sosmed:renderSM,pdf:renderPdfSel,users:renderUsers})[b.dataset.p]?.();
 });
 
 async function refresh(){
@@ -641,7 +669,7 @@ function custView(){
         ${p.garansiNum?`<small style="display:block;color:#666"><b>Garansi:</b> 🛡️ ${p.garansiNum} ${p.garansiUnit}</small>`:''}
         <small style="display:block;color:#666"><b>Biaya:</b> ${rupiah(p.biaya)} · ${bayarBadge(p.bayar)}</small>
       </div>
-      <div class="rowbtns" style="margin-top:8px"><a class="btn sm" href="/api/pdf/project/${encodeURIComponent(p.id)}">Unduh nota</a></div></div>`;
+      <div class="rowbtns" style="margin-top:8px"><a class="btn sm" href="/api/pdf/project/${encodeURIComponent(p.id)}">Unduh nota</a>${(p.pembayaran||[]).map(x=>` <a class="btn sm" href="/api/pdf/invoice/${encodeURIComponent(p.id)}/${encodeURIComponent(x.id)}">${esc(x.no)} (${esc(x.jenis)})</a>`).join('')}</div></div>`;
   }).join(''):`<div class="panel empty">Belum ada proyek yang ditautkan ke akun Anda. Hubungi admin Kudostack.</div>`;
 }
 
@@ -655,6 +683,7 @@ async function renderHome(){
     document.getElementById('btnMasterPdf').style.display='none';
     return;
   }
+  renderReminders();
   const s=STATS;
   if(!s)return;
   const cp=document.getElementById('chartPanel');if(cp)cp.style.display=s.finance?'':'none';
@@ -744,8 +773,18 @@ function detail(id){const p=PROJECTS.find(x=>x.id===id);
   <p><b>📤 Output:</b><br>${esc(p.output)||'-'}</p><br>
   <p><b>🛡️ Garansi:</b> ${p.garansiNum?`${p.garansiNum} ${p.garansiUnit}${p.garansiAkhir?' — s.d. '+p.garansiAkhir:''}`:'tidak ada'}</p>`;
   $('#modal').classList.add('on');}
-function renderProj(){
-  const html = PROJECTS.map(p=>{
+// F10: filters run on the server; without filters the cached list is used.
+function projQuery(){const q=new URLSearchParams();[['q',fpQ],['status',fpStatus],['bayar',fpBayar],['layanan',fpLayanan]].forEach(([k,el])=>{if(el.value.trim())q.set(k,el.value.trim());});return q.toString();}
+let PROJ_SEQ=0;
+async function renderProj(){
+  const seq=++PROJ_SEQ,qs=projQuery();
+  if(!qs){$('#fpCount').textContent='';drawProj(PROJECTS);return;}
+  const r=await fetch('/api/projects?'+qs);if(seq!==PROJ_SEQ||!r.ok)return;
+  const list=await r.json();$('#fpCount').textContent=list.length+' proyek cocok';drawProj(list);
+}
+function resetProjFilter(){fpQ.value='';fpStatus.value='';fpBayar.value='';fpLayanan.value='';renderProj();}
+function drawProj(LIST){
+  const html = LIST.map(p=>{
     const pct=progressPct(p);
     const steps=['Baru Masuk','Sedang Dikerjakan','Menunggu Pembayaran','Selesai / Closing'];
     const idx=steps.indexOf(p.status);
@@ -778,11 +817,44 @@ function renderProj(){
         <button class="btn green sm" onclick="goWA('${p.id}')">💬 WA</button>
         <button class="btn purple sm" onclick="dl('/api/pdf/project/${p.id}')">📄 PDF</button>
         <button class="btn red sm" onclick="delProj('${p.id}')">🗑️ Hapus</button>
+        ${can.work(ME.role)?`<button class="btn sm" onclick="openFiles('${p.id}')">Lampiran (${(p.lampiran||[]).length})</button>`:''}
+        ${can.bayar(ME.role)?`<button class="btn sm" onclick="openPay('${p.id}')">Pembayaran</button>`:''}
       </div>
     </div>`;
-  }).join('')||`<div class="panel empty">Belum ada proyek</div>`;
+  }).join('')||`<div class="panel empty">${projQuery()?'Tidak ada proyek yang cocok':'Belum ada proyek'}</div>`;
   $('#tProj').innerHTML=html;
 }
+/* F7: staged payments + invoices (superadmin) */
+async function openPay(id){let p=PROJECTS.find(x=>x.id===id);if(!p){await refresh();p=PROJECTS.find(x=>x.id===id);}if(!p)return;const list=p.pembayaran||[];const paid=list.reduce((s,x)=>s+x.nominal,0);
+  $('#modalBox').innerHTML=`<h3>Pembayaran ${esc(p.id)} — ${esc(p.nama)}</h3>
+  <p style="font-size:.8rem;color:#666;margin:6px 0 10px">Biaya ${rupiah(p.biaya)} · terbayar ${rupiah(paid)} · sisa ${rupiah(Math.max(0,p.biaya-paid))} · ${bayarBadge(p.bayar)}</p>
+  <div class="tbl-wrap"><table id="tPay"><tr><th>Invoice</th><th>Tanggal</th><th>Jenis</th><th>Nominal</th><th></th></tr>${list.length?list.map(x=>`<tr><td>${esc(x.no)}</td><td>${esc(x.tgl)}</td><td>${esc(x.jenis)}</td><td>${rupiah(x.nominal)}</td><td><a class="btn sm" href="/api/pdf/invoice/${encodeURIComponent(p.id)}/${encodeURIComponent(x.id)}">Invoice</a> <button class="btn red sm" onclick="delPay('${p.id}','${x.id}')">Hapus</button></td></tr>`).join(''):'<tr><td colspan="5" class="empty">Belum ada pembayaran</td></tr>'}</table></div>
+  <div class="frm2" style="margin-top:10px"><div><label>Jenis</label><select id="py_jenis"><option>DP</option><option>Termin</option><option>Pelunasan</option></select></div><div><label>Nominal (Rp)</label><input id="py_nom" type="number" min="1"></div><div><label>Tanggal</label><input id="py_tgl" type="date"></div><div><label>Keterangan</label><input id="py_ket"></div></div>
+  <div class="flex" style="margin-top:10px"><button class="btn blue" id="py_save" onclick="savePay('${p.id}')">Catat pembayaran</button></div>`;
+  py_tgl.value=new Date().toISOString().slice(0,10);$('#modal').classList.add('on');}
+async function savePay(id){const r=await fetch(`/api/projects/${id}/payments`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jenis:py_jenis.value,nominal:py_nom.value,tgl:py_tgl.value,ket:py_ket.value})});
+  if(!r.ok){toast(await errOf(r));return;}const d=await r.json();toast(d.pay.no+' tercatat — '+d.bayar);await refresh();renderProj();openPay(id);}
+function delPay(id,pid){askConfirm('Hapus pembayaran ini? Transaksi Kas-nya ikut terhapus.','',async ok=>{if(!ok)return;const r=await fetch(`/api/projects/${id}/payments/${pid}`,{method:'DELETE'});if(!r.ok){toast(await errOf(r));return;}await refresh();renderProj();openPay(id);});}
+/* F14: attachments */
+async function openFiles(id){let p=PROJECTS.find(x=>x.id===id);if(!p){await refresh();p=PROJECTS.find(x=>x.id===id);}if(!p)return;const l=p.lampiran||[];
+  $('#modalBox').innerHTML=`<h3>Lampiran ${esc(p.id)} — ${esc(p.nama)}</h3>
+  <p style="font-size:.8rem;color:#666;margin:6px 0 10px">PDF, JPG, PNG, WEBP, DOCX, XLSX, PPTX, maksimal 10 MB. Hanya bisa dibuka tim yang memegang proyek ini.</p>
+  <div class="tbl-wrap"><table id="tFiles"><tr><th>Nama</th><th>Ukuran</th><th>Oleh</th><th></th></tr>${l.length?l.map(f=>`<tr><td>${esc(f.name)}</td><td>${Math.ceil(f.size/1024)} KB</td><td>${esc(f.by)}</td><td><a class="btn sm" href="/api/projects/${encodeURIComponent(p.id)}/files/${encodeURIComponent(f.id)}">Unduh</a> <button class="btn red sm" onclick="delFile('${p.id}','${f.id}')">Hapus</button></td></tr>`).join(''):'<tr><td colspan="4" class="empty">Belum ada lampiran</td></tr>'}</table></div>
+  <div class="flex" style="margin-top:10px;gap:8px;flex-wrap:wrap"><input type="file" id="fl_in" accept=".pdf,.jpg,.jpeg,.png,.webp,.docx,.xlsx,.pptx" style="width:auto"><button class="btn blue" onclick="upFile('${p.id}')">Unggah</button></div>`;
+  $('#modal').classList.add('on');}
+async function upFile(id){const f=fl_in.files[0];if(!f){toast('Pilih file dulu');return;}if(f.size>10*1024*1024){toast('Maksimal 10 MB');return;}
+  const fd=new FormData();fd.append('file',f);const r=await fetch(`/api/projects/${id}/files`,{method:'POST',body:fd});
+  if(!r.ok){toast(await errOf(r));return;}toast('Lampiran tersimpan');await refresh();renderProj();openFiles(id);}
+function delFile(id,fid){askConfirm('Hapus lampiran ini?','',async ok=>{if(!ok)return;await fetch(`/api/projects/${id}/files/${fid}`,{method:'DELETE'});await refresh();renderProj();openFiles(id);});}
+/* F9: reminders on the dashboard (nothing is sent) */
+const REM_LBL={garansi:'Garansi',tagihan:'Tagihan',konten:'Konten',persetujuan:'Persetujuan'};
+async function renderReminders(){const el=$('#remPanel');const r=await fetch('/api/reminders');if(!r.ok){el.style.display='none';return;}const l=await r.json();el.style.display='block';
+  $('#remList').innerHTML=l.length?'<div class="tbl-wrap"><table>'+l.map(x=>`<tr><td><span class="badge ${x.type==='tagihan'?'b-red':x.type==='garansi'?'b-amber':'b-blue'}">${REM_LBL[x.type]||esc(x.type)}</span></td><td>${esc(x.text)}</td></tr>`).join('')+'</table></div>':'<div class="empty">Tidak ada pengingat</div>';}
+/* F12: profit report */
+async function renderProfit(){const q=new URLSearchParams();if(lbDari.value)q.set('dari',lbDari.value);if(lbSampai.value)q.set('sampai',lbSampai.value);
+  const r=await fetch('/api/reports/profit?'+q);if(!r.ok)return;const d=await r.json();
+  $('#tLaba').innerHTML='<tr><th>Kategori</th><th>Uang Masuk</th><th>Uang Keluar</th><th>Laba</th></tr>'+d.perKategori.map(k=>`<tr><td>${k.layanan?'<b>'+esc(k.kategori)+'</b>':esc(k.kategori)}</td><td>${rupiah(k.masuk)}</td><td>${rupiah(k.keluar)}</td><td>${rupiah(k.laba)}</td></tr>`).join('')+`<tr><td><b>Total</b></td><td><b>${rupiah(d.total.masuk)}</b></td><td><b>${rupiah(d.total.keluar)}</b></td><td><b>${rupiah(d.total.laba)}</b></td></tr>`;
+  $('#tLabaPic').innerHTML='<tr><th>PIC</th><th>Proyek</th><th>Nilai</th><th>Terbayar</th><th>Sisa</th></tr>'+(d.perPic.length?d.perPic.map(x=>`<tr><td>${esc(x.pic)}</td><td>${x.proyek}</td><td>${rupiah(x.nilai)}</td><td>${rupiah(x.terbayar)}</td><td>${rupiah(x.piutang)}</td></tr>`).join(''):'<tr><td colspan="5" class="empty">Tidak ada proyek pada periode ini</td></tr>');}
 
 function goWA(id){document.querySelector('[data-p="wa"]').click();waProj.value=id;renderWATexts();}
 
@@ -802,9 +874,8 @@ function renderKasCards(){
   <div class="card c-p"><small>Kas Kudostack (20%)</small><b>${rupiah((STATS?.omzet||0)*0.2)}</b></div>`;}
 async function renderTrx(){
   await refresh();
-  const j=fltJenis.value,k=fltKat.value,d=fltDari.value,s=fltSampai.value;
-  let rows=TRX.filter(x=>(!j||x.jenis===j)&&(!d||x.tgl>=d)&&(!s||x.tgl<=s));
-  if(k)rows=rows.filter(x=>x.kategori===k);
+  const q=new URLSearchParams();[['q',fltQ],['jenis',fltJenis],['kategori',fltKat],['dari',fltDari],['sampai',fltSampai]].forEach(([k,el])=>{if(el.value.trim())q.set(k,el.value.trim());});
+  const rows=q.toString()?await fetch('/api/transactions?'+q).then(r=>r.ok?r.json():[]):TRX;
   $('#tTrx').innerHTML=`<tr><th>ID</th><th>Tanggal</th><th>Jenis</th><th>Kategori</th><th>Nominal</th><th>PIC</th><th>Ket</th><th></th></tr>`+
     (rows.length?rows.map(x=>`<tr><td><b>${x.id}</b></td><td>${x.tgl}</td><td><span class="badge ${x.jenis==='Uang Masuk'?'b-green':'b-red'}">${x.jenis}</span></td><td>${x.kategori}</td><td>${rupiah(x.nominal)}</td><td>${esc(x.pic)}</td><td>${esc(x.ket)}</td><td><button class="btn red sm" onclick="delTrx('${x.id}')">🗑️</button></td></tr>`).join(''):`<tr><td colspan="8" class="empty">Tidak ada transaksi</td></tr>`);
 }
@@ -1028,9 +1099,10 @@ function showPlan(id){
   <div class="flex" style="margin-bottom:12px">
     <span class="badge b-blue">📅 ${p.tanggal}</span>
     <span class="badge b-pink">${esc(p.platform)}</span>
-    <span class="badge ${p.status==='Tayang'?'b-green':'b-amber'}">${p.status}</span>
+    <span class="badge ${p.status==='Tayang'||p.status==='Disetujui'?'b-green':p.status==='Ditolak'?'b-red':'b-amber'}" id="mPlanStatus">${esc(p.status)}</span>
+    ${p.disetujuiOleh?`<small style="color:#666">${p.status==='Ditolak'?'ditolak':'disetujui'} ${esc(p.disetujuiOleh)}</small>`:''}
     <span class="sp"></span>
-    ${p.status!=='Tayang'?`<button class="btn green sm" onclick="setPlanStatus('${p.id}','Tayang')">✅ Tandai Tayang</button>`:`<button class="btn sm" onclick="setPlanStatus('${p.id}','Draft')">↩ Draft lagi</button>`}
+    ${planButtons(p)}
     <button class="btn red sm" onclick="delPlan('${p.id}')">🗑️</button>
   </div>
   <label>📝 Brief</label><div class="tpl" style="margin:4px 0 12px">${esc(p.brief)||'-'}</div>
@@ -1049,8 +1121,15 @@ async function savePlanInline(id){
 }
 async function setPlanStatus(id,s){
   const r=await fetch(`/api/plans/${id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:s})});
-  if(r.ok){$('#modal').classList.remove('on');renderPlanner();}else toast('Gagal');
+  if(r.ok){$('#modal').classList.remove('on');renderPlanner();toast('Status: '+s);}else toast(await errOf(r));
 }
+// F11: Draft -> Review -> Disetujui/Ditolak (superadmin/admin) -> Tayang
+function planButtons(p){const mgr=['superadmin','admin'].includes(ME.role);const b=(s,l,c)=>`<button class="btn ${c} sm" data-st="${s}" onclick="setPlanStatus('${p.id}','${s}')">${l}</button>`;const out=[];
+  if(['Draft','Ditolak'].includes(p.status))out.push(b('Review','Ajukan review','blue'));
+  if(p.status==='Review'&&mgr)out.push(b('Disetujui','Setujui','green'),b('Ditolak','Tolak','red'));
+  if(p.status==='Disetujui')out.push(b('Tayang','Tandai Tayang','green'));
+  if(p.status==='Tayang'||(mgr&&!['Draft'].includes(p.status)))out.push(b('Draft','Kembali ke Draft',''));
+  return out.join(' ');}
 async function delPlan(id){askConfirm('Hapus konten ini dari kalender?','📅',async ok=>{if(!ok)return;
   const r=await fetch(`/api/plans/${id}`,{method:'DELETE'});
   if(r.ok){$('#modal').classList.remove('on');renderPlanner();}else toast('Gagal');});}
@@ -1119,6 +1198,8 @@ async function delUser(u){askConfirm('Hapus user '+u+'?','👤',async ok=>{if(!o
 async function init(){t_tgl.value=new Date().toISOString().slice(0,10);await refresh();renderHome();}
 setInterval(()=>{if(ME)refresh();},15000);
 (async function(){try{sessionStorage.removeItem('kds_user');const r=await _fetch('/api/me');if(r.ok){ME=await r.json();startApp();}}catch(e){}})();
+// F15: installable app; sw.js never caches /api or files.
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
 </script>
 </body>
 </html>

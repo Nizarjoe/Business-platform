@@ -9,3 +9,4 @@ cf-dist/
 .wrangler/
 cf/.bundle/
 .bp-dev.toml
+.bundle/

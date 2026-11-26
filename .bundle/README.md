@@ -1,1 +1,0 @@
-This folder contains the built output assets for the worker "business-platform-bundle" generated at 2026-11-26T07:04:10.751Z.

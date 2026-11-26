@@ -15,6 +15,7 @@ const {
 const { xlsx } = require('./xlsx');
 const auth = require('./auth');
 const backup = require('./backup');
+const mediaLib = require('./media');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -79,6 +80,10 @@ const ACCESS = [
   ['PUT', /^\/api\/projects\/[^/]+\/customers$/, MGR],
   ['DELETE', /^\/api\/projects\/[^/]+$/, MGR],
   ['*', /^\/api\/projects\/[^/]+\/photo$/, WORK],
+  // Documentation: everyone who can see the project may view (customers only
+  // their linked projects, checked in the route); the project team uploads.
+  ['GET', /^\/api\/projects\/[^/]+\/media(\/[^/]+\/raw)?$/, ALL],
+  ['*', /^\/api\/projects\/[^/]+\/media(\/|$)/, WORK],
   ['*', /^\/api\/transactions(\/|$)/, FIN],
   ['GET', /^\/api\/stats$/, STAFF],
   // Customers may download the nota of a project linked to them (checked in the route).
@@ -141,6 +146,26 @@ app.use('/api', (req, res, next) => {
   const rule = ACCESS.find(([m, re]) => (m === '*' || m === req.method || (m === 'GET' && req.method === 'HEAD')) && re.test(p));
   // Unknown endpoints still need a session; they end in the 404 handler.
   return gate(req, res, next, rule ? rule[2] : ALL);
+});
+/* Activity log: every write that passed the gate (and exports/downloads) is
+   recorded before the response leaves, so the entry exists when the client
+   sees success. Routes that write their own richer entry call audit(), which
+   marks the request so it is not logged twice. Login/logout log themselves. */
+app.use('/api', (req, res, next) => {
+  if (!req.user) return next();
+  const p = req.path;
+  const act = activityOf(req.method, p);
+  if (!act) return next();
+  if (act.upfront) { logActivity(req, act, 200, null).then(() => next(), next); return; }
+  const send = res.send;
+  let done = false;
+  res.send = function (body) {
+    if (done || req._audited) return send.call(this, body);
+    done = true;
+    logActivity(req, act, res.statusCode, body).catch(e => console.error('activity log:', e.message)).then(() => send.call(this, body));
+    return this;
+  };
+  next();
 });
 // Uploaded photos are client data: logged-in staff and customers only.
 const filesGate = (req, res, next) => gate(req, res, next, ALL);
@@ -282,10 +307,12 @@ app.post('/api/login', async (req, res) => {
   }
   if (!ok) {
     await Promise.all([rateHit(ipKey, LOGIN_WINDOW_MS), rateHit(userKey, LOGIN_WINDOW_MS)]);
+    await writeLog(req, { actor: name || '(kosong)', role: u ? u.role : null, action: 'auth.login.gagal', target: name, summary: u ? (u.pass ? 'password salah' : 'password belum diatur') : 'username tidak dikenal' }).catch(() => {});
     if (u && !u.pass) return res.status(401).json({ error: 'Password akun ini belum diatur. Minta superadmin mengaturnya.' });
     return res.status(401).json({ error: 'Username atau password salah' });
   }
   await rateClear(userKey);
+  await writeLog(req, { actor: u.username, role: u.role, action: 'auth.login', target: u.username, summary: 'login berhasil' });
   const token = auth.newToken();
   await createSession(await auth.tokenHash(token), u.username, Date.now() + auth.SESSION_TTL_MS);
   res.set('Cache-Control', 'no-store');
@@ -298,6 +325,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 app.get('/api/admin/storage', async (req, res) => res.json(await storageInfo()));
 
 app.post('/api/logout', async (req, res) => {
+  await writeLog(req, { actor: req.user.username, role: req.user.role, action: 'auth.logout', target: req.user.username, summary: 'logout' });
   await deleteSession(req.user.tokenHash);
   res.append('Set-Cookie', auth.clearCookie(isSecure(req)));
   res.json({ ok: true });
@@ -327,7 +355,97 @@ async function confirmPassword(req, res) {
   await rateClear(key);
   return true;
 }
-const audit = (req, action, target, detail) => addAudit({ actor: req.user.username, action, target, detail: { ...detail, ip: clientIp(req) } });
+/* ---------- activity log ---------- */
+const SENSITIVE_KEY = /pass|token|hash|secret|signature|confirm|current|next|image|foto|photo|cookie|^data$/i;
+// Short "key=value" list of what the request changed; never passwords, tokens, or image data.
+function summarize(body) {
+  if (!body || typeof body !== 'object' || Buffer.isBuffer(body)) return '';
+  const parts = [];
+  for (const [k, v] of Object.entries(body)) {
+    if (SENSITIVE_KEY.test(k)) { parts.push(k + '=[disembunyikan]'); continue; }
+    let t;
+    if (v === null || ['number', 'boolean'].includes(typeof v)) t = String(v);
+    else if (typeof v === 'string') t = v.length > 60 ? v.slice(0, 60) + '…' : v;
+    else if (Array.isArray(v)) t = v.every(x => typeof x === 'string' && x.length < 40) ? '[' + v.join(', ') + ']' : `[${v.length} item]`;
+    else t = '{…}';
+    parts.push(k + '=' + t);
+  }
+  const out = parts.join(', ');
+  return out.length > 400 ? out.slice(0, 400) + '…' : out;
+}
+const ENTITY = { auth: 'akun', user: 'user', project: 'proyek', kas: 'kas', invoice: 'invoice', lampiran: 'lampiran', dokumentasi: 'dokumentasi', plan: 'konten', wa: 'wa', backup: 'backup', export: 'export', paymeta: 'info bayar', qris: 'info bayar', nota: 'nota' };
+const entityOf = action => ENTITY[String(action).split('.')[0]] || String(action).split('.')[0];
+function writeLog(req, { actor, role, action, target, summary, detail }) {
+  return addAudit({ actor: actor || null, role: role || null, action, entity: entityOf(action), target: target || null, summary: summary || '', ip: clientIp(req), detail: detail || null });
+}
+// Explicit entries (payment info, bayar, invoice, backup) keep before/after values.
+const audit = (req, action, target, detail) => {
+  if (action !== 'project.bayar') req._audited = true; // bayar: the generic project.ubah entry is kept too
+  const d = { ...detail, ip: clientIp(req) };
+  const ba = {};
+  if (d.before !== undefined) ba.sebelum = JSON.stringify(d.before);
+  if (d.after !== undefined) ba.sesudah = JSON.stringify(d.after);
+  const summary = Object.keys(ba).length ? summarize(ba) : summarize(req.body);
+  return writeLog(req, { actor: req.user.username, role: req.user.role, action, target, summary, detail: d });
+};
+// [method, path (after /api), action, id group]. upfront = log before the handler (downloads).
+const ACTIVITY = [
+  ['POST', /^\/logout$/, 'auth.logout', 0, 'skip'],
+  ['POST', /^\/me\/password$/, 'user.password.ganti-sendiri'],
+  ['PUT', /^\/users\/([^/]+)\/password$/, 'user.password.diatur', 1],
+  ['POST', /^\/users$/, 'user.tambah'],
+  ['DELETE', /^\/users\/([^/]+)$/, 'user.hapus', 1],
+  ['POST', /^\/backups$/, 'backup.run'],
+  ['POST', /^\/projects$/, 'project.tambah'],
+  ['PUT', /^\/projects\/([^/]+)$/, 'project.ubah', 1],
+  ['DELETE', /^\/projects\/([^/]+)$/, 'project.hapus', 1],
+  ['PUT', /^\/projects\/([^/]+)\/customers$/, 'project.customer', 1],
+  ['POST', /^\/projects\/([^/]+)\/photo$/, 'project.foto.upload', 1],
+  ['DELETE', /^\/projects\/([^/]+)\/photo$/, 'project.foto.hapus', 1],
+  ['POST', /^\/transactions$/, 'kas.tambah'],
+  ['DELETE', /^\/transactions\/([^/]+)$/, 'kas.hapus', 1],
+  ['POST', /^\/projects\/([^/]+)\/payments$/, 'invoice.tambah', 1],
+  ['DELETE', /^\/projects\/([^/]+)\/payments\/([^/]+)$/, 'invoice.hapus', 2],
+  ['POST', /^\/projects\/([^/]+)\/files$/, 'lampiran.upload', 1],
+  ['DELETE', /^\/projects\/([^/]+)\/files\/([^/]+)$/, 'lampiran.hapus', 2],
+  // Documentation: one entry when the upload completes, not per chunk.
+  ['POST', /^\/projects\/([^/]+)\/media$/, null],
+  ['PUT', /^\/projects\/([^/]+)\/media\/[^/]+\/chunks\/\d+$/, null],
+  ['POST', /^\/projects\/([^/]+)\/media\/([^/]+)\/complete$/, 'dokumentasi.upload', 2],
+  ['PUT', /^\/projects\/([^/]+)\/media\/([^/]+)$/, 'dokumentasi.ubah', 2],
+  ['DELETE', /^\/projects\/([^/]+)\/media\/([^/]+)$/, 'dokumentasi.hapus', 2],
+  ['POST', /^\/send-wa$/, 'wa.antrean'],
+  ['POST', /^\/plans$/, 'plan.tambah'],
+  ['PUT', /^\/plans\/([^/]+)$/, 'plan.ubah', 1],
+  ['DELETE', /^\/plans\/([^/]+)$/, 'plan.hapus', 1],
+  ['POST', /^\/qris$/, 'qris.meta'],
+  ['POST', /^\/qris\/image$/, 'qris.image'],
+  ['PUT', /^\/paymeta$/, 'paymeta'],
+  ['GET', /^\/export\/(.+)$/, 'export.data', 1, 'upfront'],
+  ['GET', /^\/pdf\/(master|finance)$/, 'export.pdf', 1, 'upfront'],
+  ['GET', /^\/pdf\/project\/([^/]+)$/, 'nota.download', 1, 'upfront'],
+  ['GET', /^\/pdf\/invoice\/[^/]+\/([^/]+)$/, 'invoice.download', 1, 'upfront']
+];
+function activityOf(method, p) {
+  for (const [m, re, action, g, mode] of ACTIVITY) {
+    if (m !== method) continue;
+    const mm = re.exec(p);
+    if (!mm) continue;
+    if (!action || mode === 'skip') return null;
+    return { action, target: g ? decodeURIComponent(mm[g]) : null, upfront: mode === 'upfront', path: p };
+  }
+  // Any other write still leaves a trace.
+  return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) ? { action: 'lain.' + method.toLowerCase(), target: p } : null;
+}
+async function logActivity(req, act, status, body) {
+  let obj = body;
+  if (typeof body === 'string') { try { obj = JSON.parse(body); } catch (e) { obj = null; } }
+  const target = act.target || (obj && typeof obj === 'object' && (obj.id || obj.username)) || null;
+  let summary = act.upfront ? summarize(req.query) : summarize(req.body);
+  if (!summary && obj && typeof obj === 'object' && obj.name) summary = 'nama=' + String(obj.name).slice(0, 120);
+  if (status >= 400) summary = `gagal (${status})${obj && obj.error ? ': ' + String(obj.error).slice(0, 120) : ''}` + (summary ? ' | ' + summary : '');
+  await writeLog(req, { actor: req.user.username, role: req.user.role, action: act.action, target, summary, detail: status >= 400 ? { status } : null });
+}
 /* F8: backups live in the BACKUPS KV namespace (Cloudflare only). The cron
    Worker cf/backup-worker.mjs writes one every night; superadmin can make one
    now and download any of the last 14 days. */
@@ -353,7 +471,19 @@ app.get('/api/backups/:name', async (req, res) => {
   res.set('Content-Disposition', `attachment; filename="business-platform-${req.params.name}"`);
   res.send(body);
 });
-app.get('/api/audit', async (req, res) => res.json(await listAudit(Math.min(Number(req.query.limit) || 200, 500))));
+// Activity log (superadmin only, see ACCESS). Filters: user, aksi (prefix), dari/sampai (WIB dates), limit/offset.
+const wibStart = d => /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(d + 'T00:00:00+07:00').toISOString() : null;
+app.get('/api/audit', async (req, res) => {
+  const q = req.query;
+  const next = d => { const t = wibStart(d); return t ? new Date(Date.parse(t) + 86400000).toISOString() : null; };
+  const r = await listAudit({
+    actor: lc(qs(q.user)) || null, action: qs(q.aksi).slice(0, 60) || null,
+    from: wibStart(qs(q.dari)), to: next(qs(q.sampai)),
+    limit: Math.min(Math.max(parseInt(qs(q.limit), 10) || 50, 1), 200), offset: Math.max(parseInt(qs(q.offset), 10) || 0, 0)
+  });
+  res.set('X-Total-Count', String(r.total));
+  res.json(r.items);
+});
 
 async function setPassword(username, password) {
   const rec = await auth.hashPassword(password);
@@ -490,7 +620,8 @@ app.get('/api/projects', async (req, res) => {
   const list = filterProjects(visibleProjects(req.user, db.projects), req.query).sort((a, b) => b.id.localeCompare(a.id));
   const out = pageOf(res, list, req.query);
   const noUrls = p => (p.lampiran ? { ...p, lampiran: p.lampiran.map(({ url, ...rest }) => rest) } : p);
-  res.json(req.user.role === 'customer' ? out.map(customerView) : out.map(noUrls));
+  const n = media.enabled() ? await media.counts() : {};
+  res.json((req.user.role === 'customer' ? out.map(customerView) : out.map(noUrls)).map(p => ({ ...p, dokumentasi: n[p.id] || 0 })));
 });
 
 // Superadmin/admin link customer accounts to a project.
@@ -588,13 +719,16 @@ app.put('/api/projects/:id', async (req, res) => {
 
 app.delete('/api/projects/:id', async (req, res) => {
   let missing = false;
+  let name = '';
   await update(db => {
     const i = db.projects.findIndex(x => x.id === req.params.id);
     if (i < 0) { missing = true; return; }
+    name = db.projects[i].nama || '';
     db.projects.splice(i, 1);
   });
   if (missing) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
-  res.json({ ok: true });
+  if (media.enabled()) await media.removeProject(req.params.id).catch(e => console.error('media cleanup:', e.message));
+  res.json({ ok: true, id: req.params.id, name });
 });
 
 app.delete('/api/projects/:id/photo', async (req, res) => {
@@ -906,6 +1040,140 @@ app.delete('/api/projects/:id/files/:fid', async (req, res) => {
   if (!gone) return res.status(404).json({ error: 'Lampiran tidak ditemukan' });
   await removeDoc(gone.url);
   res.json({ ok: true });
+});
+
+/* ================= DOKUMENTASI PROYEK (foto & video) ================= */
+// Upload in pieces so no request is larger than one chunk (Workers bodies are
+// capped at 100 MB and memory at 128 MB):
+//   POST   /api/projects/:id/media                  {name, type, size, caption, tgl} -> {id, chunkSize, chunks}
+//   PUT    /api/projects/:id/media/:mid/chunks/:n   raw bytes (n = 0..chunks-1, each chunkSize except the last)
+//   POST   /api/projects/:id/media/:mid/complete    -> the item (now visible)
+//   GET    /api/projects/:id/media                  ready items
+//   GET    /api/projects/:id/media/:mid/raw         bytes, Range supported (video seeking)
+//   PUT    /api/projects/:id/media/:mid             {caption, tgl}
+//   DELETE /api/projects/:id/media/:mid             uploader, admin, superadmin
+const media = mediaLib.makeMedia({ cf: cfEnv(), loadDoc, updateDoc, dataDir: DATA_DIR, remoteOnlyOther: () => usingRemote() && !usingCloudflare() });
+const mediaOut = m => ({ id: m.id, kind: m.kind, type: m.type, name: m.name, size: m.size, caption: m.caption, tgl: m.tgl, by: m.by, at: m.at });
+// Resolves the project (visible to this user) and, when mid is given, its media item.
+async function mediaCtx(req, res, { needReady = true } = {}) {
+  if (!media.enabled()) { res.status(501).json({ error: 'Dokumentasi butuh penyimpanan Cloudflare atau lokal' }); return null; }
+  const p = (await load()).projects.find(x => x.id === req.params.id);
+  if (!canSeeProject(req.user, p)) { res.status(404).json({ error: 'Proyek tidak ditemukan' }); return null; }
+  if (!req.params.mid) return { p };
+  let m;
+  try { m = await media.get(req.params.mid); }
+  catch (e) { res.status(503).json({ error: 'Tabel dokumentasi belum dibuat (migrasi 0004)' }); return null; }
+  if (!m || m.projectId !== p.id || (needReady && m.status !== 'ready')) { res.status(404).json({ error: 'Dokumentasi tidak ditemukan' }); return null; }
+  return { p, m };
+}
+const mediaMgr = req => MGR.includes(req.user.role);
+
+app.get('/api/projects/:id/media', async (req, res) => {
+  const c = await mediaCtx(req, res); if (!c) return;
+  try { res.json((await media.list(c.p.id)).map(mediaOut)); }
+  catch (e) { res.status(503).json({ error: 'Tabel dokumentasi belum dibuat (migrasi 0004)' }); }
+});
+
+app.post('/api/projects/:id/media', async (req, res) => {
+  const c = await mediaCtx(req, res); if (!c) return;
+  const b = req.body || {};
+  const type = String(b.type || '').toLowerCase();
+  const kind = mediaLib.TYPES[type];
+  if (!kind) return res.status(400).json({ error: 'Foto: JPG, PNG, WEBP. Video: MP4, WEBM, MOV.' });
+  const size = Number(b.size);
+  if (!Number.isInteger(size) || size < 12) return res.status(400).json({ error: 'Ukuran file tidak valid' });
+  if (size > mediaLib.LIMITS[kind]) return res.status(413).json({ error: `Maksimal ${mediaLib.LIMITS[kind] / 1048576} MB untuk ${kind}` });
+  const m = {
+    id: 'MED-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), projectId: c.p.id, kind, type,
+    name: cleanName(b.name), size, chunks: Math.ceil(size / mediaLib.CHUNK), chunkSize: mediaLib.CHUNK,
+    caption: String(b.caption || '').slice(0, 300), tgl: isDate(b.tgl) ? b.tgl : today(), by: req.user.username,
+    at: new Date().toISOString(), status: 'uploading'
+  };
+  try { await media.dropStale(c.p.id); await media.insert(m); }
+  catch (e) { return res.status(503).json({ error: 'Tabel dokumentasi belum dibuat (migrasi 0004)' }); }
+  res.json({ id: m.id, chunkSize: m.chunkSize, chunks: m.chunks });
+});
+
+app.put('/api/projects/:id/media/:mid/chunks/:n', express.raw({ type: () => true, limit: mediaLib.CHUNK + 1024 }), async (req, res) => {
+  const c = await mediaCtx(req, res, { needReady: false }); if (!c) return;
+  const { m } = c;
+  if (m.status !== 'uploading' || m.by !== req.user.username) return res.status(409).json({ error: 'Upload ini sudah selesai atau milik orang lain' });
+  const n = Number(req.params.n);
+  if (!Number.isInteger(n) || n < 0 || n >= m.chunks) return res.status(400).json({ error: 'Nomor potongan salah' });
+  const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  const want = n < m.chunks - 1 ? m.chunkSize : m.size - m.chunkSize * (m.chunks - 1);
+  if (buf.length !== want) return res.status(400).json({ error: `Potongan ${n} harus ${want} byte, diterima ${buf.length}` });
+  if (n === 0 && mediaLib.sniffMedia(buf) !== m.type) {
+    await media.remove(m);
+    return res.status(400).json({ error: 'Isi file bukan ' + m.type + ' (dicek dari isi file, bukan nama)' });
+  }
+  await media.putChunk(m.id, n, buf);
+  res.json({ ok: true, n });
+});
+
+app.post('/api/projects/:id/media/:mid/complete', async (req, res) => {
+  const c = await mediaCtx(req, res, { needReady: false }); if (!c) return;
+  const { m } = c;
+  if (m.by !== req.user.username) return res.status(409).json({ error: 'Upload milik orang lain' });
+  if (m.status === 'ready') return res.json(mediaOut(m));
+  const have = await media.chunkCount(m.id);
+  if (have !== m.chunks) return res.status(400).json({ error: `Baru ${have} dari ${m.chunks} potongan diterima` });
+  const first = await media.readChunk(m.id, 0);
+  if (mediaLib.sniffMedia(first) !== m.type) { await media.remove(m); return res.status(400).json({ error: 'Isi file tidak cocok dengan jenisnya' }); }
+  await media.setReady(m.id);
+  await audit(req, 'dokumentasi.upload', m.id, { after: { proyek: m.projectId, nama: m.name, jenis: m.kind, ukuran: m.size, caption: m.caption } });
+  res.json(mediaOut({ ...m, status: 'ready' }));
+});
+
+app.get('/api/projects/:id/media/:mid/raw', async (req, res) => {
+  const c = await mediaCtx(req, res); if (!c) return;
+  const { m } = c;
+  const r = mediaLib.parseRange(req.get('range'), m.size);
+  if (r === 'bad') { res.set('Content-Range', `bytes */${m.size}`); return res.status(416).end(); }
+  const s = r ? r.s : 0, e = r ? r.e : m.size - 1;
+  res.status(r ? 206 : 200);
+  res.set('Content-Type', m.type);
+  res.set('Accept-Ranges', 'bytes');
+  if (r) res.set('Content-Range', `bytes ${s}-${e}/${m.size}`);
+  res.set('Content-Disposition', `inline; filename="${m.name.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '')}"; filename*=UTF-8''${encodeURIComponent(m.name)}`);
+  res.set('Content-Security-Policy', 'sandbox');
+  res.set('Cache-Control', 'private, max-age=600');
+  const segs = mediaLib.segments(m.id, s, e, m.chunkSize);
+  if (usingCloudflare()) {
+    // cf/entry.mjs streams these KV pieces one at a time, so a 100 MB video
+    // never sits in Worker memory.
+    res.set('X-BP-Stream', JSON.stringify(segs.map(({ k, s, e }) => ({ k, s, e }))));
+    res.set('X-BP-Length', String(e - s + 1));
+    return res.end();
+  }
+  res.set('Content-Length', String(e - s + 1));
+  if (req.method === 'HEAD') return res.end();
+  for (const g of segs) {
+    const buf = await media.readChunk(m.id, g.n);
+    if (!buf) return res.destroy();
+    res.write(buf.subarray(g.s, g.e));
+  }
+  res.end();
+});
+
+app.put('/api/projects/:id/media/:mid', async (req, res) => {
+  const c = await mediaCtx(req, res); if (!c) return;
+  const { m } = c;
+  if (m.by !== req.user.username && !mediaMgr(req)) return res.status(403).json({ error: 'Hanya pengunggah, admin, atau superadmin' });
+  const b = req.body || {};
+  const caption = b.caption !== undefined ? String(b.caption).slice(0, 300) : m.caption;
+  const tgl = isDate(b.tgl) ? b.tgl : m.tgl;
+  await media.update(m.id, { caption, tgl });
+  res.json(mediaOut({ ...m, caption, tgl }));
+});
+
+app.delete('/api/projects/:id/media/:mid', async (req, res) => {
+  const c = await mediaCtx(req, res, { needReady: false }); if (!c) return;
+  const { m } = c;
+  if (m.by !== req.user.username && !mediaMgr(req)) return res.status(403).json({ error: 'Hanya pengunggah, admin, atau superadmin' });
+  await media.remove(m);
+  await audit(req, 'dokumentasi.hapus', m.id, { before: { proyek: m.projectId, nama: m.name, jenis: m.kind, oleh: m.by } });
+  res.json({ ok: true, id: m.id, name: m.name });
 });
 
 /* ================= STATS (+ omzet + chart series) ================= */

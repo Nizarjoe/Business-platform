@@ -466,7 +466,7 @@ test('local files: projects, payments, photos, reports, and the other JSON store
     assert.strictEqual(log[2].detail.before.an, 'Kudostack Official');
     assert.strictEqual(log[2].detail.after.an, 'Kudostack Uji');
     assert.strictEqual(log[1].actor, 'superadmin');
-    assert.ok(log.some(e => e.action === 'project.bayar'), 'bayar changes are audited too');
+    assert.ok((await api(base, 'GET', '/api/audit?aksi=project.bayar')).data.length > 0, 'bayar changes are audited too');
     const qrisGot = await af(base + '/qris.jpg?v=1');
     assert.deepStrictEqual(Buffer.from(await qrisGot.arrayBuffer()), PNG);
 
@@ -522,6 +522,55 @@ test('local files: projects, payments, photos, reports, and the other JSON store
     assert.strictEqual(Buffer.from(await got.arrayBuffer()).toString(), '%PDF-1.4 test');
     assert.strictEqual((await api(base, 'DELETE', `/api/projects/${pj.data.id}/files/${pdfDoc.data.id}`)).status, 200);
     assert.strictEqual((await af(base + `/api/projects/${pj.data.id}/files/${pdfDoc.data.id}`)).status, 404);
+
+    // Documentation: chunked upload, magic bytes, Range across chunks, delete
+    const CH = 8 * 1024 * 1024;
+    const vid = Buffer.alloc(CH + 1000);
+    Buffer.from('\x00\x00\x00\x18ftypisom', 'latin1').copy(vid);
+    for (let i = 12; i < vid.length; i++) vid[i] = i % 251;
+    const start = await api(base, 'POST', `/api/projects/${pj.data.id}/media`, { name: 'servis.mp4', type: 'video/mp4', size: vid.length, caption: 'Proses servis', tgl: '2026-11-20' });
+    assert.strictEqual(start.status, 200, start.text);
+    assert.strictEqual(start.data.chunks, 2);
+    const putChunk = (id, n, buf) => af(base + `/api/projects/${pj.data.id}/media/${id}/chunks/${n}`, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body: buf });
+    assert.strictEqual((await putChunk(start.data.id, 1, vid.subarray(CH, CH + 10))).status, 400, 'wrong chunk length');
+    assert.strictEqual((await api(base, 'POST', `/api/projects/${pj.data.id}/media/${start.data.id}/complete`)).status, 400, 'incomplete');
+    assert.strictEqual((await putChunk(start.data.id, 0, vid.subarray(0, CH))).status, 200);
+    assert.strictEqual((await putChunk(start.data.id, 1, vid.subarray(CH))).status, 200);
+    const done = await api(base, 'POST', `/api/projects/${pj.data.id}/media/${start.data.id}/complete`);
+    assert.strictEqual(done.status, 200, done.text);
+    assert.strictEqual(done.data.kind, 'video');
+    const rng = await af(base + `/api/projects/${pj.data.id}/media/${start.data.id}/raw`, { headers: { range: `bytes=${CH - 5}-${CH + 4}` } });
+    assert.strictEqual(rng.status, 206);
+    assert.strictEqual(rng.headers.get('content-range'), `bytes ${CH - 5}-${CH + 4}/${vid.length}`);
+    assert.ok(Buffer.from(await rng.arrayBuffer()).equals(vid.subarray(CH - 5, CH + 5)));
+    const full = await af(base + `/api/projects/${pj.data.id}/media/${start.data.id}/raw`);
+    assert.strictEqual(full.status, 200);
+    assert.ok(Buffer.from(await full.arrayBuffer()).equals(vid));
+    assert.strictEqual((await af(base + `/api/projects/${pj.data.id}/media/${start.data.id}/raw`, { headers: { range: 'bytes=99999999-' } })).status, 416);
+    const fake = await api(base, 'POST', `/api/projects/${pj.data.id}/media`, { name: 'x.jpg', type: 'image/jpeg', size: 20 });
+    assert.strictEqual((await putChunk(fake.data.id, 0, Buffer.from('<html>not an image!'.padEnd(20)))).status, 400, 'magic bytes');
+    assert.strictEqual((await api(base, 'POST', `/api/projects/${pj.data.id}/media`, { name: 'x.exe', type: 'application/x-msdownload', size: 20 })).status, 400);
+    assert.strictEqual((await api(base, 'POST', `/api/projects/${pj.data.id}/media`, { name: 'big.mp4', type: 'video/mp4', size: 101 * 1024 * 1024 })).status, 413);
+    const ml = await api(base, 'GET', `/api/projects/${pj.data.id}/media`);
+    assert.deepStrictEqual(ml.data.map(m => [m.name, m.caption, m.by]), [['servis.mp4', 'Proses servis', 'superadmin']]);
+    assert.strictEqual((await api(base, 'GET', '/api/projects')).data.find(p => p.id === pj.data.id).dokumentasi, 1);
+    assert.strictEqual((await api(base, 'PUT', `/api/projects/${pj.data.id}/media/${start.data.id}`, { caption: 'Sesudah servis' })).data.caption, 'Sesudah servis');
+    assert.strictEqual((await api(base, 'DELETE', `/api/projects/${pj.data.id}/media/${start.data.id}`)).status, 200);
+    assert.strictEqual((await api(base, 'GET', `/api/projects/${pj.data.id}/media`)).data.length, 0);
+
+    // Activity log: writes, logins, filters, paging, no secrets
+    const act = await api(base, 'GET', '/api/audit?limit=500');
+    const actions = act.data.map(e => e.action);
+    for (const a of ['auth.login', 'project.tambah', 'kas.tambah', 'dokumentasi.upload', 'dokumentasi.ubah', 'dokumentasi.hapus', 'lampiran.upload', 'invoice.tambah', 'user.password.diatur', 'export.data'])
+      assert.ok(actions.includes(a), 'activity has ' + a + ' (' + [...new Set(actions)].join() + ')');
+    assert.ok(act.data.every(e => e.ip && 'role' in e && 'summary' in e));
+    assert.ok(!/salah-sekali-123|-pass-123/.test(JSON.stringify(act.data)), 'no password in the log');
+    const pg1 = await api(base, 'GET', '/api/audit?limit=2&aksi=dokumentasi');
+    assert.strictEqual(pg1.data.length, 2);
+    assert.ok(Number(pg1.headers.get('x-total-count')) >= 3);
+    assert.ok(pg1.data.every(e => e.action.startsWith('dokumentasi') && e.entity === 'dokumentasi'));
+    assert.strictEqual((await api(base, 'GET', '/api/audit?user=tidakada')).data.length, 0);
+    assert.strictEqual((await api(base, 'GET', '/api/audit?dari=2099-01-01')).data.length, 0);
 
     // login rate limit (per username)
     let last;

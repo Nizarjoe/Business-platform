@@ -24,7 +24,8 @@ const LOCAL_FILES = {
   paymeta: 'paymeta.json',
   'wa-outbox': 'wa-outbox.json',
   sessions: 'sessions.json',
-  audit: 'audit.json'
+  audit: 'audit.json',
+  'project-media': 'project-media.json'
 };
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
@@ -437,9 +438,10 @@ async function deleteUserSessions(username, exceptHash) {
   });
 }
 
-/* ---------- audit log (F3) ----------
-   Cloudflare tables mode: audit table. Otherwise an "audit" document capped at 500 entries. */
-const AUDIT_MAX = 500;
+/* ---------- activity log (F3 + full log) ----------
+   Cloudflare tables mode: audit table. Otherwise an "audit" document capped at
+   AUDIT_MAX entries (local/dev only). There is no delete: the app cannot remove entries. */
+const AUDIT_MAX = 5000;
 async function addAudit(entry) {
   const e = { ts: new Date().toISOString(), ...entry };
   if (await usingTables()) return TABLES.appendAudit(e);
@@ -449,10 +451,14 @@ async function addAudit(entry) {
     return l.slice(-AUDIT_MAX);
   });
 }
-async function listAudit(limit = 200) {
-  if (await usingTables()) return TABLES.listAudit(limit);
-  const l = (await loadDoc('audit')) || [];
-  return l.slice(-limit).reverse();
+// f: { actor, action (prefix), from, to (ISO), limit, offset } -> { total, items } newest first.
+async function listAudit(f = {}) {
+  const q = { limit: 50, offset: 0, ...f };
+  if (await usingTables()) return TABLES.listAudit(q);
+  const l = ((await loadDoc('audit')) || []).filter(x =>
+    (!q.actor || x.actor === q.actor) && (!q.action || String(x.action).startsWith(q.action)) &&
+    (!q.from || x.ts >= q.from) && (!q.to || x.ts < q.to)).reverse();
+  return { total: l.length, items: l.slice(q.offset, q.offset + q.limit) };
 }
 async function storageInfo() {
   const mode = await storageMode();

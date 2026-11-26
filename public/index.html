@@ -238,6 +238,7 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
   <button data-p="sosmed" id="navSosmed">📱 Media Sosial</button>
   <button data-p="pdf" id="navPdf">📄 Download PDF</button>
   <button data-p="users" id="navUsers" style="display:none">👥 Kelola User</button>
+  <button data-p="log" id="navLog" style="display:none">Log Aktivitas</button>
   <div class="foot">KUDOSTACK © 2026<br>All-in-One Admin Hub</div>
 </nav>
 
@@ -504,10 +505,31 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
     <div class="flex" style="gap:8px"><button class="btn blue" id="btnBackup" onclick="runBackup()">Buat backup sekarang</button></div>
     <div class="tbl-wrap" style="margin-top:10px"><table id="tBackups"></table></div>
   </div>
-  <div class="panel" style="margin-top:14px">
-    <h3>Log perubahan info bayar</h3>
-    <p style="font-size:.78rem;color:#666;margin:4px 0 8px">Perubahan rekening, e-wallet, VA, QRIS, lokasi, dan status bayar proyek. 200 terbaru.</p>
-    <div class="tbl-wrap"><table id="tAudit"></table></div>
+</div>
+
+<div class="page" id="p-log">
+  <div class="ptitle"><h2>Log Aktivitas</h2></div>
+  <div class="panel">
+    <p style="font-size:.78rem;color:#666;margin:4px 0 8px">Semua perubahan data, login (berhasil dan gagal), logout, ganti password, export, dan unduhan nota/invoice/backup, termasuk perubahan info bayar. Hanya superadmin yang bisa melihat. Log tidak bisa dihapus dari aplikasi. Waktu dalam WIB.</p>
+    <div class="flex" id="logFilter" style="gap:8px;flex-wrap:wrap">
+      <select id="lgUser" style="width:auto"><option value="">Semua user</option></select>
+      <select id="lgAksi" style="width:auto">
+        <option value="">Semua aksi</option><option value="auth">Login / logout</option><option value="user">User &amp; password</option>
+        <option value="project">Proyek</option><option value="kas">Kas</option><option value="invoice">Invoice</option>
+        <option value="lampiran">Lampiran</option><option value="dokumentasi">Dokumentasi</option><option value="plan">Konten</option>
+        <option value="paymeta">Info bayar</option><option value="qris">QRIS</option><option value="backup">Backup</option>
+        <option value="export">Export</option><option value="nota">Nota</option><option value="wa">WA</option>
+      </select>
+      <input type="date" id="lgDari" style="width:auto" title="Dari tanggal">
+      <input type="date" id="lgSampai" style="width:auto" title="Sampai tanggal">
+      <button class="btn pink sm" onclick="LOG_OFF=0;renderLog()">Tampilkan</button>
+    </div>
+    <div class="tbl-wrap" style="margin-top:10px"><table id="tLog"></table></div>
+    <div class="flex" style="margin-top:8px;gap:8px;align-items:center">
+      <button class="btn sm" id="lgPrev" onclick="LOG_OFF=Math.max(0,LOG_OFF-LOG_PAGE);renderLog()">Sebelumnya</button>
+      <small id="lgInfo" style="color:#666"></small>
+      <button class="btn sm" id="lgNext" onclick="LOG_OFF+=LOG_PAGE;renderLog()">Berikutnya</button>
+    </div>
   </div>
 </div>
 </main>
@@ -612,6 +634,7 @@ function startApp(){
   const r=ME.role;
   const isCust=r==='customer';
   $('#navUsers').style.display=r==='superadmin'?'flex':'none';
+  $('#navLog').style.display=r==='superadmin'?'flex':'none';
   $('#navWA').style.display=['superadmin','admin','anggota'].includes(r)?'flex':'none';
   $('#navPlanner').style.display=['superadmin','admin','medsos'].includes(r)?'flex':'none';
   $('#navSosmed').style.display=isCust||['superadmin','admin','medsos'].includes(r)?'flex':'none';
@@ -633,7 +656,7 @@ $$('nav button').forEach(b=>b.onclick=()=>{
   $$('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
   $$('.page').forEach(p=>p.classList.remove('on'));
   $('#p-'+b.dataset.p).classList.add('on');
-  ({home:renderHome,proyek:renderProj,kas:()=>{renderTrx();renderKasCards();renderProfit();},wa:renderWA,planner:renderPlanner,sosmed:renderSM,pdf:renderPdfSel,users:renderUsers})[b.dataset.p]?.();
+  ({home:renderHome,proyek:renderProj,kas:()=>{renderTrx();renderKasCards();renderProfit();},wa:renderWA,planner:renderPlanner,sosmed:renderSM,pdf:renderPdfSel,users:renderUsers,log:openLog})[b.dataset.p]?.();
 });
 
 async function refresh(){
@@ -676,7 +699,7 @@ function custView(){
         ${p.garansiNum?`<small style="display:block;color:#666"><b>Garansi:</b> 🛡️ ${p.garansiNum} ${p.garansiUnit}</small>`:''}
         <small style="display:block;color:#666"><b>Biaya:</b> ${rupiah(p.biaya)} · ${bayarBadge(p.bayar)}</small>
       </div>
-      <div class="rowbtns" style="margin-top:8px"><a class="btn sm" href="/api/pdf/project/${encodeURIComponent(p.id)}">Unduh nota</a>${(p.pembayaran||[]).map(x=>` <a class="btn sm" href="/api/pdf/invoice/${encodeURIComponent(p.id)}/${encodeURIComponent(x.id)}">${esc(x.no)} (${esc(x.jenis)})</a>`).join('')}</div></div>`;
+      <div class="rowbtns" style="margin-top:8px"><a class="btn sm" href="/api/pdf/project/${encodeURIComponent(p.id)}">Unduh nota</a>${(p.pembayaran||[]).map(x=>` <a class="btn sm" href="/api/pdf/invoice/${encodeURIComponent(p.id)}/${encodeURIComponent(x.id)}">${esc(x.no)} (${esc(x.jenis)})</a>`).join('')} <button class="btn sm" onclick="openMedia('${p.id}')">Dokumentasi (${p.dokumentasi||0})</button></div></div>`;
   }).join(''):`<div class="panel empty">Belum ada proyek yang ditautkan ke akun Anda. Hubungi admin Kudostack.</div>`;
 }
 
@@ -825,6 +848,7 @@ function drawProj(LIST){
         <button class="btn purple sm" onclick="dl('/api/pdf/project/${p.id}')">📄 PDF</button>
         <button class="btn red sm" onclick="delProj('${p.id}')">🗑️ Hapus</button>
         ${can.work(ME.role)?`<button class="btn sm" onclick="openFiles('${p.id}')">Lampiran (${(p.lampiran||[]).length})</button>`:''}
+        <button class="btn sm" onclick="openMedia('${p.id}')">Dokumentasi (${p.dokumentasi||0})</button>
         ${can.bayar(ME.role)?`<button class="btn sm" onclick="openPay('${p.id}')">Pembayaran</button>`:''}
       </div>
     </div>`;
@@ -853,6 +877,81 @@ async function upFile(id){const f=fl_in.files[0];if(!f){toast('Pilih file dulu')
   const fd=new FormData();fd.append('file',f);const r=await fetch(`/api/projects/${id}/files`,{method:'POST',body:fd});
   if(!r.ok){toast(await errOf(r));return;}toast('Lampiran tersimpan');await refresh();renderProj();if($('#modal').classList.contains('on'))await openFiles(id);}
 function delFile(id,fid){askConfirm('Hapus lampiran ini?','',async ok=>{if(!ok)return;await fetch(`/api/projects/${id}/files/${fid}`,{method:'DELETE'});await refresh();renderProj();if($('#modal').classList.contains('on'))await openFiles(id);});}
+/* Dokumentasi proyek: foto (dikompres di browser) dan video, diunggah per potongan */
+const MEDIA_EXT={jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',webp:'image/webp',mp4:'video/mp4',m4v:'video/mp4',webm:'video/webm',mov:'video/quicktime'};
+const fmtSize=b=>b>=1048576?(b/1048576).toFixed(1)+' MB':Math.ceil(b/1024)+' KB';
+const mediaSrc=(id,m)=>`/api/projects/${encodeURIComponent(id)}/media/${encodeURIComponent(m.id)}/raw`;
+async function openMedia(id){
+  const p=PROJECTS.find(x=>x.id===id)||{nama:''};
+  const r=await fetch(`/api/projects/${encodeURIComponent(id)}/media`);
+  if(!r.ok){toast(await errOf(r));return;}
+  const list=await r.json(),canUp=can.work(ME.role);
+  const canDel=m=>m.by===ME.username||['superadmin','admin'].includes(ME.role);
+  $('#modalBox').innerHTML=`<h3>Dokumentasi ${esc(id)}${p.nama?' — '+esc(p.nama):''}</h3>
+  <p style="font-size:.78rem;color:#666;margin:6px 0 10px">${ME.role==='customer'?'Foto dan video pengerjaan proyek ini dari tim Kudostack.':'Foto JPG, PNG, WEBP (dikompres otomatis, maks 15 MB) dan video MP4, WEBM, MOV (maks 100 MB). Hanya bisa dilihat tim proyek dan customer yang ditautkan.'}</p>
+  ${canUp?`<div class="frm2" id="mdForm">
+    <div><label>File foto / video</label><input type="file" id="md_file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime,.mov,.m4v"></div>
+    <div><label>Tanggal</label><input type="date" id="md_tgl"></div>
+    <div style="grid-column:1/-1"><label>Caption</label><input id="md_cap" maxlength="300" placeholder="cth: kondisi sebelum servis"></div>
+  </div>
+  <div class="flex" style="margin-top:8px;gap:8px;align-items:center"><button class="btn blue" id="md_btn" onclick="upMedia('${id}')">Unggah</button><small id="md_prog" style="color:#666"></small></div>`:''}
+  <div id="mdGal" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px">
+  ${list.length?list.map(m=>`<div class="mdItem" data-mid="${m.id}" style="border:2px solid #111;border-radius:10px;padding:8px;background:#fff">
+    ${m.kind==='video'?`<video controls playsinline preload="metadata" src="${mediaSrc(id,m)}" style="width:100%;border-radius:8px;background:#000"></video>`:`<a href="${mediaSrc(id,m)}" target="_blank" rel="noopener"><img src="${mediaSrc(id,m)}" loading="lazy" alt="${esc(m.caption||m.name)}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px"></a>`}
+    <div style="font-size:.78rem;margin-top:6px;word-break:break-word"><b>${esc(m.caption||m.name)}</b></div>
+    <div style="font-size:.72rem;color:#666">${esc(m.tgl)} · ${esc(m.by)} · ${m.kind} ${fmtSize(m.size)}</div>
+    ${canDel(m)?`<button class="btn red sm" style="margin-top:6px" onclick="delMedia('${id}','${m.id}')">Hapus</button>`:''}
+  </div>`).join(''):'<div class="empty">Belum ada dokumentasi</div>'}
+  </div>`;
+  if(canUp)md_tgl.value=new Date().toISOString().slice(0,10);
+  $('#modal').classList.add('on');
+}
+// Re-encode photos to JPEG, longest side 1920 px, when that makes them smaller.
+async function compressImage(f){
+  try{
+    const bmp=await createImageBitmap(f);const k=Math.min(1,1920/Math.max(bmp.width,bmp.height));
+    const c=document.createElement('canvas');c.width=Math.round(bmp.width*k);c.height=Math.round(bmp.height*k);
+    const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,c.width,c.height);g.drawImage(bmp,0,0,c.width,c.height);
+    const b=await new Promise(r=>c.toBlob(r,'image/jpeg',0.82));
+    if(b&&b.size<f.size)return new File([b],f.name.replace(/\.[^.]+$/,'')+'.jpg',{type:'image/jpeg'});
+  }catch(e){}
+  return f;
+}
+async function upMedia(id){
+  let f=md_file.files[0];if(!f){toast('Pilih file dulu');return;}
+  const type=MEDIA_EXT[(f.name.split('.').pop()||'').toLowerCase()]||f.type;
+  const isImg=/^image\//.test(type);
+  if(!isImg&&!/^video\//.test(type)){toast('Hanya foto (JPG, PNG, WEBP) atau video (MP4, WEBM, MOV)');return;}
+  const btn=md_btn,prog=md_prog;btn.disabled=true;
+  try{
+    let t=type;
+    if(isImg){prog.textContent='Mengompres foto…';f=await compressImage(f);t=f.type==='image/jpeg'?'image/jpeg':type;}
+    const max=(isImg?15:100)*1048576;
+    if(f.size>max){toast(`Maksimal ${isImg?15:100} MB`);return;}
+    const r=await fetch(`/api/projects/${id}/media`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:f.name,type:t,size:f.size,caption:md_cap.value,tgl:md_tgl.value})});
+    if(!r.ok){toast(await errOf(r));return;}
+    const s=await r.json();
+    for(let n=0;n<s.chunks;n++){
+      prog.textContent=`Mengunggah ${Math.round(n/s.chunks*100)}%`;
+      const part=f.slice(n*s.chunkSize,Math.min(f.size,(n+1)*s.chunkSize));
+      let ok=false;
+      for(let a=0;a<3&&!ok;a++){
+        const q=await fetch(`/api/projects/${id}/media/${s.id}/chunks/${n}`,{method:'PUT',headers:{'Content-Type':'application/octet-stream'},body:part}).catch(()=>null);
+        if(q&&q.ok)ok=true;else if(q&&q.status<500){toast(await errOf(q));return;}
+      }
+      if(!ok){toast('Upload terputus, coba lagi');return;}
+    }
+    prog.textContent='Menyimpan…';
+    const c=await fetch(`/api/projects/${id}/media/${s.id}/complete`,{method:'POST'});
+    if(!c.ok){toast(await errOf(c));return;}
+    toast('Dokumentasi tersimpan');
+    await refresh();if(ME.role!=='customer')renderProj();
+    if($('#modal').classList.contains('on'))await openMedia(id);
+  }finally{btn.disabled=false;prog.textContent='';}
+}
+function delMedia(id,mid){askConfirm('Hapus dokumentasi ini?','',async ok=>{if(!ok)return;const r=await fetch(`/api/projects/${id}/media/${mid}`,{method:'DELETE'});if(!r.ok){toast(await errOf(r));return;}toast('Dokumentasi dihapus');await refresh();if(ME.role!=='customer')renderProj();await openMedia(id);});}
+// A closed modal must not keep a video playing.
+new MutationObserver(()=>{if(!$('#modal').classList.contains('on'))$$('#modalBox video').forEach(v=>v.pause());}).observe($('#modal'),{attributes:true,attributeFilter:['class']});
 /* F9: reminders on the dashboard (nothing is sent) */
 const REM_LBL={garansi:'Garansi',tagihan:'Tagihan',konten:'Konten',persetujuan:'Persetujuan'};
 async function renderReminders(){const el=$('#remPanel');const r=await fetch('/api/reminders');if(!r.ok){el.style.display='none';return;}const l=await r.json();el.style.display='block';
@@ -1171,9 +1270,9 @@ async function renderUsers(){
     <td><span class="badge ${roleCls[u.role]||'b-gray'}">${roleLbl[u.role]||u.role}</span></td><td>${u.created}</td>
     <td>${u.hasPassword?'':'<small style="color:#b91c1c">belum ada password</small> '}<button class="btn sm" onclick="openPwd('${u.username}')">Atur password</button>
     ${u.username!=='superadmin'?`<button class="btn red sm" onclick="delUser('${u.username}')">🗑️</button>`:'<small style="color:#888">akun utama</small>'}</td></tr>`).join('');
-  renderAudit();renderBackups();
+  renderBackups();
 }
-const AUDIT_LBL={'backup.run':'Backup dibuat','backup.download':'Backup diunduh',paymeta:'Info pembayaran','qris.meta':'Info QRIS','qris.image':'Gambar QRIS','project.bayar':'Status bayar proyek'};
+const AUDIT_LBL={'backup.run':'Backup dibuat','backup.download':'Backup diunduh',paymeta:'Info pembayaran','qris.meta':'Info QRIS','qris.image':'Gambar QRIS','project.bayar':'Status bayar proyek','project.payment':'Pembayaran proyek','auth.login':'Login','auth.login.gagal':'Login gagal','auth.logout':'Logout','user.password.ganti-sendiri':'Ganti password sendiri','user.password.diatur':'Password diatur','user.tambah':'User ditambah','user.hapus':'User dihapus','project.tambah':'Proyek ditambah','project.ubah':'Proyek diubah','project.hapus':'Proyek dihapus','project.customer':'Customer ditautkan','project.foto.upload':'Foto proyek diunggah','project.foto.hapus':'Foto proyek dihapus','kas.tambah':'Transaksi ditambah','kas.hapus':'Transaksi dihapus','invoice.tambah':'Invoice dibuat','invoice.hapus':'Invoice dihapus','invoice.download':'Invoice diunduh','nota.download':'Nota diunduh','lampiran.upload':'Lampiran diunggah','lampiran.hapus':'Lampiran dihapus','dokumentasi.upload':'Dokumentasi diunggah','dokumentasi.ubah':'Dokumentasi diubah','dokumentasi.hapus':'Dokumentasi dihapus','plan.tambah':'Konten ditambah','plan.ubah':'Konten diubah','plan.hapus':'Konten dihapus','wa.antrean':'Pesan WA diantrekan','export.data':'Export data','export.pdf':'Export PDF'};
 const short=v=>{const t=typeof v==='string'?v:JSON.stringify(v);return t&&t.length>140?t.slice(0,140)+'…':(t||'-');};
 async function renderBackups(){
   const r=await fetch('/api/backups');
@@ -1185,12 +1284,26 @@ async function runBackup(){
   const b=$('#btnBackup');b.disabled=true;
   const r=await fetch('/api/backups',{method:'POST'});
   b.disabled=false;
-  if(r.ok){toast('Backup dibuat');renderBackups();renderAudit();}else toast(await errOf(r));
+  if(r.ok){toast('Backup dibuat');renderBackups();}else toast(await errOf(r));
 }
-async function renderAudit(){
-  const r=await fetch('/api/audit');if(!r.ok)return;
-  const log=await r.json();
-  $('#tAudit').innerHTML='<tr><th>Waktu</th><th>Oleh</th><th>Perubahan</th><th>Sebelum</th><th>Sesudah</th></tr>'+(log.length?log.map(e=>`<tr><td>${esc(new Date(e.ts).toLocaleString('id-ID'))}</td><td>${esc(e.actor)}</td><td>${esc(AUDIT_LBL[e.action]||e.action)}${e.target?' <small>('+esc(e.target)+')</small>':''}</td><td><small>${esc(short(e.detail&&e.detail.before))}</small></td><td><small>${esc(short(e.detail&&e.detail.after))}</small></td></tr>`).join(''):'<tr><td colspan="5" class="empty">Belum ada perubahan tercatat</td></tr>');
+/* Activity log (superadmin) */
+const LOG_PAGE=50;let LOG_OFF=0;
+const wib=ts=>new Date(ts).toLocaleString('id-ID',{timeZone:'Asia/Jakarta',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+async function openLog(){
+  const r=await fetch('/api/users');
+  if(r.ok){const cur=lgUser.value;lgUser.innerHTML='<option value="">Semua user</option>'+(await r.json()).map(u=>`<option value="${esc(u.username)}">${esc(u.username)}</option>`).join('');lgUser.value=cur;}
+  LOG_OFF=0;renderLog();
+}
+async function renderLog(){
+  const q=new URLSearchParams({limit:LOG_PAGE,offset:LOG_OFF});
+  [['user',lgUser],['aksi',lgAksi],['dari',lgDari],['sampai',lgSampai]].forEach(([k,el])=>{if(el.value)q.set(k,el.value);});
+  const r=await fetch('/api/audit?'+q);
+  if(!r.ok){$('#tLog').innerHTML=`<tr><td class="empty">${esc(await errOf(r))}</td></tr>`;return;}
+  const log=await r.json(),total=Number(r.headers.get('X-Total-Count')||log.length);
+  const sum=e=>e.summary||(e.detail&&(e.detail.before!==undefined||e.detail.after!==undefined)?'sebelum '+short(e.detail.before)+' | sesudah '+short(e.detail.after):'');
+  $('#tLog').innerHTML='<tr><th>Waktu</th><th>User</th><th>Role</th><th>Aksi</th><th>Entitas</th><th>Ringkasan</th><th>IP</th></tr>'+(log.length?log.map(e=>`<tr><td><small>${esc(wib(e.ts))}</small></td><td>${esc(e.actor||'-')}</td><td>${esc(e.role||'-')}</td><td>${esc(AUDIT_LBL[e.action]||e.action)}</td><td>${esc(e.entity||'-')}${e.target?' <small>'+esc(e.target)+'</small>':''}</td><td><small>${esc(sum(e)||'-')}</small></td><td><small>${esc(e.ip||(e.detail&&e.detail.ip)||'-')}</small></td></tr>`).join(''):'<tr><td colspan="7" class="empty">Tidak ada aktivitas yang cocok</td></tr>');
+  $('#lgInfo').textContent=total?`${LOG_OFF+1}-${Math.min(LOG_OFF+log.length,total)} dari ${total}`:'';
+  $('#lgPrev').disabled=LOG_OFF<=0;$('#lgNext').disabled=LOG_OFF+log.length>=total;
 }
 async function addUser(){
   const r=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:nu_name.value,role:nu_role.value})});

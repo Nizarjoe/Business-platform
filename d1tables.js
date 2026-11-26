@@ -124,13 +124,30 @@ function makeStore(DB) {
     throw new Error('Data sedang diubah bersamaan, coba lagi');
   }
 
+  // Activity log. Falls back to the F3 columns while migration 0004 is not applied.
   async function appendAudit(entry) {
-    await DB.prepare('insert into audit (ts, actor, action, target, detail) values (?1, ?2, ?3, ?4, ?5)')
-      .bind(entry.ts, entry.actor || null, entry.action, entry.target || null, JSON.stringify(entry.detail || null)).run();
+    const detail = JSON.stringify(entry.detail || null);
+    try {
+      await DB.prepare('insert into audit (ts, actor, role, action, entity, target, summary, ip, detail) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)')
+        .bind(entry.ts, entry.actor || null, entry.role || null, entry.action, entry.entity || null, entry.target || null, entry.summary || null, entry.ip || null, detail).run();
+    } catch (e) {
+      if (!/no column|has no column named/i.test(String(e && e.message))) throw e;
+      await DB.prepare('insert into audit (ts, actor, action, target, detail) values (?1, ?2, ?3, ?4, ?5)')
+        .bind(entry.ts, entry.actor || null, entry.action, entry.target || null, detail).run();
+    }
   }
-  async function listAudit(limit) {
-    const r = await DB.prepare('select id, ts, actor, action, target, detail from audit order by id desc limit ?1').bind(limit).all();
-    return rows(r).map(x => ({ ...x, detail: x.detail ? JSON.parse(x.detail) : null }));
+  // f: { actor, action (prefix), from, to (ISO), limit, offset } -> { total, items }
+  async function listAudit(f) {
+    const where = [], args = [];
+    const arg = v => { args.push(v); return '?' + args.length; };
+    if (f.actor) where.push('actor = ' + arg(f.actor));
+    if (f.action) where.push("action like " + arg(f.action.replace(/[%_\\]/g, '\\$&') + '%') + " escape '\\'");
+    if (f.from) where.push('ts >= ' + arg(f.from));
+    if (f.to) where.push('ts < ' + arg(f.to));
+    const w = where.length ? ' where ' + where.join(' and ') : '';
+    const total = await DB.prepare('select count(*) as n from audit' + w).bind(...args).first('n');
+    const r = await DB.prepare('select * from audit' + w + ' order by id desc limit ' + arg(f.limit) + ' offset ' + arg(f.offset)).bind(...args).all();
+    return { total, items: rows(r).map(x => ({ ...x, detail: x.detail ? JSON.parse(x.detail) : null })) };
   }
 
   /* ---------- one-time copy from app_documents (S7) ----------

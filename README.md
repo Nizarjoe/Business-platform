@@ -93,3 +93,35 @@ Laporan ada di `GET /api/admin/storage` (superadmin). `app_documents` tidak diha
   `npx wrangler d1 execute business-platform --remote --file restore.sql`. Skrip itu
   mengosongkan lalu mengisi ulang setiap tabel yang ada di backup. Coba dulu di
   database preview.
+
+## Dokumentasi proyek (foto & video)
+
+- Tombol **Dokumentasi** di kartu proyek (dan di kartu proyek customer). Foto JPG/PNG/WEBP dikompres di browser (sisi terpanjang 1920 px, JPEG) sebelum diunggah. Batasnya 15 MB per foto dan 100 MB per video (MP4/WEBM/MOV).
+- Siapa yang bisa apa:
+  - Melihat: semua yang bisa melihat proyeknya. Anggota hanya proyek yang dia pegang atau buat; customer hanya proyek yang ditautkan ke akunnya (asumsi, bisa diubah di `ACCESS`/`canSeeProject`).
+  - Mengunggah: superadmin, admin, dan anggota.
+  - Menghapus: pengunggahnya, admin, dan superadmin.
+- Jenis file dicek dari byte awal isinya, bukan dari nama file atau klaim browser.
+- Upload dikirim per potongan 8 MiB (`POST .../media`, `PUT .../media/:mid/chunks/:n`, `POST .../media/:mid/complete`). Dengan begitu tidak ada request yang mendekati batas body Workers (100 MB) atau memori Worker (128 MB).
+- Penyimpanan:
+  - Metadata ada di tabel D1 `project_media` (migrasi 0004).
+  - Isi file disimpan di KV `FILES` sebagai `media/<id>/<n>`. Satu value KV maksimal 25 MiB.
+  - Batas KV: free plan 1 GB total dan 1.000 tulis per hari (video 100 MB = 13 tulis); paket berbayar jauh lebih longgar.
+  - R2 bisa menggantikan KV nanti. Yang perlu diubah hanya `putChunk`/`readChunk`/`dropBlobs` di `media.js` dan streaming di `cf/entry.mjs`. Tabel tidak berubah.
+- File diputar dan diunduh lewat `GET /api/projects/:id/media/:mid/raw`, yang wajib sesi dan cek akses proyek. Route ini mendukung `Range`, jadi video bisa dimajukan atau dimundurkan.
+  - Di Cloudflare, Express hanya menulis rencana potongan ke header internal `X-BP-Stream`. `cf/entry.mjs` lalu men-stream potongan KV satu per satu, sehingga video tidak pernah dimuat utuh di memori. Header itu dihapus sebelum respons dikirim.
+- Upload yang tidak selesai dihapus setelah 24 jam (saat ada upload baru di proyek yang sama). Menghapus proyek ikut menghapus dokumentasinya.
+
+## Log aktivitas
+
+- Menu **Log Aktivitas** dan `GET /api/audit` hanya untuk superadmin; role lain mendapat 403.
+- Filter: `user`, `aksi` (awalan, misalnya `dokumentasi`), `dari`/`sampai` (tanggal WIB), `limit`/`offset`. Jumlah total ada di header `X-Total-Count`.
+- Yang dicatat:
+  - Setiap aksi tulis yang lolos cek akses, termasuk yang gagal validasi (ditandai `gagal (kode)`).
+  - Login berhasil dan gagal, logout, ganti password.
+  - Export, dan unduhan nota, invoice, serta backup.
+  - Kolom: waktu, user, role, aksi, entitas, id, ringkasan, IP.
+- Ringkasan berisi field yang dikirim. Password, token, hash, tanda tangan, dan data gambar diganti `[disembunyikan]`.
+- Entri info bayar F3 tetap ada di tabel yang sama dengan nilai sebelum/sesudah.
+- Tidak ada route untuk menghapus log.
+- Migrasi 0004 menambah kolom `role`, `entity`, `summary`, `ip` dan indeks. Sebelum migrasi diterapkan, kode tetap menulis ke kolom lama.

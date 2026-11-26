@@ -463,6 +463,11 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
     <div class="flex" style="margin-top:12px"><button class="btn blue" onclick="addUser()">💾 Tambah User</button></div>
   </div>
   <div class="tbl-wrap"><table id="tUsers"></table></div>
+  <div class="panel" style="margin-top:14px">
+    <h3>Log perubahan info bayar</h3>
+    <p style="font-size:.78rem;color:#666;margin:4px 0 8px">Perubahan rekening, e-wallet, VA, QRIS, lokasi, dan status bayar proyek. 200 terbaru.</p>
+    <div class="tbl-wrap"><table id="tAudit"></table></div>
+  </div>
 </div>
 </main>
 </div>
@@ -493,6 +498,18 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
     </div>
   </form>
 </div>
+<div id="cpwBox" style="position:fixed;inset:0;background:rgba(17,17,17,.6);display:none;align-items:center;justify-content:center;z-index:300;padding:16px">
+  <form id="cpwForm" onsubmit="event.preventDefault();cpwDone(true);" style="background:#fff;border:var(--brd);border-radius:16px;max-width:380px;width:100%;padding:24px;box-shadow:10px 10px 0 #111">
+    <h3 style="margin:0 0 8px;font-size:1rem">Konfirmasi password</h3>
+    <p id="cpwMsg" style="font-size:.8rem;color:#666;margin:0 0 10px"></p>
+    <input type="text" name="username" id="cpwUser" autocomplete="username" style="display:none">
+    <label>Password Anda</label><input id="cpwPass" type="password" autocomplete="current-password" required>
+    <div class="flex" style="justify-content:flex-end;gap:10px;margin-top:14px">
+      <button type="button" class="btn" onclick="cpwDone(false)">Batal</button>
+      <button type="submit" class="btn green">Lanjut</button>
+    </div>
+  </form>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -517,6 +534,12 @@ async function savePwd(){
   if(!r.ok){$('#pwdErr').textContent=d.error||'Gagal menyimpan';return;}
   closePwd();toast(PWD_TARGET?'Password '+PWD_TARGET+' disimpan':'Password diganti');if(PWD_TARGET)renderUsers();
 }
+// F3: payment details are saved only with the user's password typed again.
+let CPW=null;
+function askPassword(msg){$('#cpwMsg').textContent=msg;$('#cpwUser').value=ME.username;$('#cpwPass').value='';$('#cpwBox').style.display='flex';setTimeout(()=>$('#cpwPass').focus(),50);return new Promise(r=>{CPW=r;});}
+function cpwDone(ok){const v=$('#cpwPass').value;$('#cpwBox').style.display='none';$('#cpwPass').value='';const r=CPW;CPW=null;if(r)r(ok&&v?v:null);}
+async function payFetch(url,method,body,msg){const pw=await askPassword(msg);if(!pw)return null;return fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify({...body,confirmPassword:pw})});}
+const errOf=async r=>((await r.json().catch(()=>({}))).error||'Gagal simpan');
 function askConfirm(msg,icon,cb){
   const box=document.getElementById('confirmBox');
   document.getElementById('cfIcon').textContent=icon||'⚠️';
@@ -905,8 +928,9 @@ function editPaymetaHtml(tab){
 async function savePaymeta(tab){
   const list=(PAYMETA[tab]||[]).map((x,i)=>({nama:document.getElementById(`pm_${tab}_n${i}`).value,nomor:document.getElementById(`pm_${tab}_r${i}`).value}));
   const body={[tab]:list,an:document.getElementById('pm_an').value};
-  const r=await fetch('/api/paymeta',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(r.ok){toast('Tersimpan ✓');await loadPayMeta();renderPay(tab);}else toast('Gagal simpan');
+  const r=await payFetch('/api/paymeta','PUT',body,'Mengubah nomor pembayaran yang dilihat customer. Masukkan password Anda.');
+  if(!r)return;
+  if(r.ok){toast('Tersimpan ✓');await loadPayMeta();renderPay(tab);}else toast(await errOf(r));
 }
 function editLokasiHtml(){
   const L=PAYMETA.lokasi||{};
@@ -933,16 +957,18 @@ async function saveLokasi(){
   if(r.ok){toast('Lokasi tersimpan ✓');await loadPayMeta();renderPay('lokasi');}else toast('Gagal simpan');
 }
 async function saveQrisMeta(){
-  const r=await fetch('/api/qris',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({nama:qr_nama.value,nmid:qr_nmid.value,tipe:qr_tipe.value})});
-  if(r.ok){toast('Info QRIS tersimpan ✓');renderPay('qris');}else toast('Gagal simpan');
+  const r=await payFetch('/api/qris','POST',{nama:qr_nama.value,nmid:qr_nmid.value,tipe:qr_tipe.value},'Mengubah info QRIS. Masukkan password Anda.');
+  if(!r)return;
+  if(r.ok){toast('Info QRIS tersimpan ✓');renderPay('qris');}else toast(await errOf(r));
 }
 async function uploadQrisImg(inp){
   const f=inp.files[0];if(!f)return;
   if(f.size>5*1024*1024){toast('Maksimal 5 MB');return;}
-  toast('Mengunggah QR baru…');
   const b64=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.readAsDataURL(f);});
-  const rr=await fetch('/api/qris/image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:b64})});
-  if(rr.ok){toast('Gambar QRIS diganti ✓');renderPay('qris');}else toast('Gagal ganti gambar');
+  const rr=await payFetch('/api/qris/image','POST',{image:b64},'Mengganti gambar QRIS. Masukkan password Anda.');
+  inp.value='';
+  if(!rr)return;
+  if(rr.ok){toast('Gambar QRIS diganti ✓');renderPay('qris');}else toast(await errOf(rr));
 }
 document.addEventListener('click',e=>{const t=e.target.closest('.paytab');if(t)renderPay(t.dataset.pay);});
 
@@ -1053,6 +1079,14 @@ async function renderUsers(){
     <td><span class="badge ${roleCls[u.role]||'b-gray'}">${roleLbl[u.role]||u.role}</span></td><td>${u.created}</td>
     <td>${u.hasPassword?'':'<small style="color:#b91c1c">belum ada password</small> '}<button class="btn sm" onclick="openPwd('${u.username}')">Atur password</button>
     ${u.username!=='superadmin'?`<button class="btn red sm" onclick="delUser('${u.username}')">🗑️</button>`:'<small style="color:#888">akun utama</small>'}</td></tr>`).join('');
+  renderAudit();
+}
+const AUDIT_LBL={paymeta:'Info pembayaran','qris.meta':'Info QRIS','qris.image':'Gambar QRIS','project.bayar':'Status bayar proyek'};
+const short=v=>{const t=typeof v==='string'?v:JSON.stringify(v);return t&&t.length>140?t.slice(0,140)+'…':(t||'-');};
+async function renderAudit(){
+  const r=await fetch('/api/audit');if(!r.ok)return;
+  const log=await r.json();
+  $('#tAudit').innerHTML='<tr><th>Waktu</th><th>Oleh</th><th>Perubahan</th><th>Sebelum</th><th>Sesudah</th></tr>'+(log.length?log.map(e=>`<tr><td>${esc(new Date(e.ts).toLocaleString('id-ID'))}</td><td>${esc(e.actor)}</td><td>${esc(AUDIT_LBL[e.action]||e.action)}${e.target?' <small>('+esc(e.target)+')</small>':''}</td><td><small>${esc(short(e.detail&&e.detail.before))}</small></td><td><small>${esc(short(e.detail&&e.detail.after))}</small></td></tr>`).join(''):'<tr><td colspan="5" class="empty">Belum ada perubahan tercatat</td></tr>');
 }
 async function addUser(){
   const r=await fetch('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:nu_name.value,role:nu_role.value})});

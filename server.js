@@ -69,6 +69,7 @@ const ACCESS = [
   ['DELETE', /^\/api\/users\/[^/]+$/, SA],
   ['PUT', /^\/api\/users\/[^/]+\/password$/, SA],
   ['GET', /^\/api\/admin\//, SA],
+  ['GET', /^\/api\/audit$/, SA],
   ['GET', /^\/api\/projects$/, ALL],
   ['POST', /^\/api\/projects$/, WORK],
   ['PUT', /^\/api\/projects\/[^/]+$/, WORK],
@@ -194,6 +195,18 @@ if (EMBEDDED) {
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', filesGate, express.static(UPLOADS_DIR));
 
+// Magic bytes, so a renamed file cannot pass as an image or PDF (F3, F14).
+function sniffType(buf) {
+  if (!buf || buf.length < 4) return null;
+  const b = buf;
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'application/pdf';
+  if (b.length >= 12 && b.slice(0, 4).toString('latin1') === 'RIFF' && b.slice(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  if (b[0] === 0x50 && b[1] === 0x4b && b[2] === 0x03 && b[3] === 0x04) return 'application/zip';
+  return null;
+}
+
 function safeExt(name) {
   const ext = path.extname(name || '').toLowerCase();
   return ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.bmp'].includes(ext) ? ext : '.jpg';
@@ -283,6 +296,28 @@ app.get('/api/me', (req, res) => {
   res.json({ username: req.user.username, role: req.user.role });
 });
 
+/* F3: changing where customers send money needs the actor's password again
+   (a stolen session alone is not enough), and every change is written to the
+   audit log with the values before and after. Wrong passwords count toward a
+   per-user limit like login. */
+const CONFIRM_MAX = 8;
+async function confirmPassword(req, res) {
+  const key = 'confirm:user:' + req.user.username;
+  const r = await rateGet(key);
+  if (r.count >= CONFIRM_MAX) { res.status(429).json({ error: 'Terlalu banyak konfirmasi salah. Coba lagi beberapa menit lagi.' }); return false; }
+  const pw = (req.body || {}).confirmPassword;
+  const me = (await getUsers()).find(x => x.username === req.user.username);
+  if (!me || !(await auth.verifyPassword(typeof pw === 'string' ? pw : '', me.pass))) {
+    await rateHit(key, LOGIN_WINDOW_MS);
+    res.status(403).json({ error: 'Konfirmasi password salah', needPassword: true });
+    return false;
+  }
+  await rateClear(key);
+  return true;
+}
+const audit = (req, action, target, detail) => addAudit({ actor: req.user.username, action, target, detail: { ...detail, ip: clientIp(req) } });
+app.get('/api/audit', async (req, res) => res.json(await listAudit(Math.min(Number(req.query.limit) || 200, 500))));
+
 async function setPassword(username, password) {
   const rec = await auth.hashPassword(password);
   let found = false;
@@ -322,6 +357,7 @@ app.post('/api/users', async (req, res) => {
   const { username, role } = req.body || {};
   const name = String(username || '').trim().toLowerCase();
   if (!name) return res.status(400).json({ error: 'Username wajib diisi' });
+  if (!/^[a-z0-9][a-z0-9._-]{1,31}$/.test(name)) return res.status(400).json({ error: 'Username 2-32 karakter: huruf kecil, angka, titik, minus, garis bawah' });
   let forbidden = false, conflict = false, created = null;
   await updateDoc('users', userSeed, (us) => {
     if (us.find(x => x.username === name)) { conflict = true; return us; }
@@ -465,7 +501,7 @@ app.post('/api/projects', async (req, res) => {
 });
 
 app.put('/api/projects/:id', async (req, res) => {
-  let missing = false, bayarDenied = false, linkDenied = false;
+  let missing = false, bayarDenied = false, linkDenied = false, bayarFrom;
   const body = { ...(req.body || {}) };
   delete body.id; delete body.fotoIn; delete body.fotoOut; delete body.createdBy;
   if (body.customers !== undefined) {
@@ -479,6 +515,7 @@ app.put('/api/projects/:id', async (req, res) => {
     if (body.bayar !== undefined && body.bayar !== project.bayar && req.user.role !== 'superadmin') { bayarDenied = true; return null; }
     if (body.customers !== undefined && !sameList(body.customers, project.customers) && !MGR.includes(req.user.role)) { linkDenied = true; return null; }
     const prevBayar = project.bayar, prevStatus = project.status;
+    bayarFrom = prevBayar;
     Object.assign(project, body);
     project.biaya = Number(project.biaya || 0);
     project.garansiNum = Number(project.garansiNum || 0);
@@ -501,6 +538,7 @@ app.put('/api/projects/:id', async (req, res) => {
   if (bayarDenied) return res.status(403).json({ error: 'Status bayar hanya bisa diubah superadmin' });
   if (linkDenied) return res.status(403).json({ error: 'Hanya superadmin/admin bisa menautkan customer' });
   if (missing) return res.status(404).json({ error: 'Proyek tidak ditemukan' });
+  if (bayarFrom !== undefined && bayarFrom !== p.bayar) await audit(req, 'project.bayar', p.id, { before: bayarFrom, after: p.bayar });
   res.json(p);
 });
 
@@ -1121,6 +1159,8 @@ async function getQrisMeta() {
 app.get('/api/qris', async (req, res) => res.json(await getQrisMeta()));
 app.post('/api/qris', async (req, res) => {
   const { nama, nmid, tipe } = req.body || {};
+  if (!(await confirmPassword(req, res))) return;
+  const before = await getQrisMeta();
   const meta = await updateDoc('qris-meta', () => ({ ...QRIS_DEFAULT }), (current) => {
     const next = (!current || typeof current !== 'object' || Array.isArray(current)) ? { ...QRIS_DEFAULT } : current;
     if (nama !== undefined) next.nama = nama;
@@ -1130,13 +1170,17 @@ app.post('/api/qris', async (req, res) => {
     next.oleh = req.user.username;
     return next;
   });
+  await audit(req, 'qris.meta', 'qris', { before: { nama: before.nama, nmid: before.nmid, tipe: before.tipe }, after: { nama: meta.nama, nmid: meta.nmid, tipe: meta.tipe } });
   res.json({ ok: true, meta });
 });
 app.post('/api/qris/image', async (req, res) => {
   const b64 = (req.body || {}).image || '';
   const m = b64.match(/^data:image\/(png|jpe?g);base64,(.+)$/);
   if (!m) return res.status(400).json({ error: 'File harus gambar PNG/JPG (maks 5 MB)' });
+  if (!(await confirmPassword(req, res))) return;
   const buf = Buffer.from(m[2], 'base64');
+  const sniff = sniffType(buf);
+  if (sniff !== 'image/png' && sniff !== 'image/jpeg') return res.status(400).json({ error: 'Isi file bukan gambar PNG/JPG' });
   const contentType = m[1] === 'png' ? 'image/png' : 'image/jpeg';
   let imageUrl = null;
   if (usingRemote()) imageUrl = await uploadObject('qris/current', buf, contentType);
@@ -1152,6 +1196,8 @@ app.post('/api/qris/image', async (req, res) => {
     next.oleh = req.user.username;
     return next;
   });
+  const digest = Buffer.from(await crypto.subtle.digest('SHA-256', buf)).toString('hex');
+  await audit(req, 'qris.image', 'qris', { after: { bytes: buf.length, type: sniff, sha256: digest } });
   res.json({ ok: true });
 });
 
@@ -1179,8 +1225,13 @@ async function getPayMeta() {
   return { ...DEF_PAYMETA, ...existing };
 }
 app.get('/api/paymeta', async (req, res) => res.json(await getPayMeta()));
+const PAY_FIELDS = ['ewallet', 'bank', 'va', 'an'];
 app.put('/api/paymeta', async (req, res) => {
   const b = req.body || {};
+  const before = await getPayMeta();
+  const touches = PAY_FIELDS.filter(k => b[k] !== undefined && JSON.stringify(b[k]) !== JSON.stringify(before[k]));
+  // Account numbers and the account name need the password; the shop location does not.
+  if (touches.length && !(await confirmPassword(req, res))) return;
   const meta = await updateDoc('paymeta', () => JSON.parse(JSON.stringify(DEF_PAYMETA)), (current) => {
     const next = (!current || typeof current !== 'object' || Array.isArray(current))
       ? JSON.parse(JSON.stringify(DEF_PAYMETA))
@@ -1190,6 +1241,13 @@ app.put('/api/paymeta', async (req, res) => {
     if (b.lokasi && typeof b.lokasi === 'object') next.lokasi = { ...next.lokasi, ...b.lokasi };
     return next;
   });
+  const changed = [...PAY_FIELDS, 'lokasi'].filter(k => JSON.stringify(before[k]) !== JSON.stringify(meta[k]));
+  if (changed.length) {
+    await audit(req, 'paymeta', changed.join(','), {
+      before: Object.fromEntries(changed.map(k => [k, before[k]])),
+      after: Object.fromEntries(changed.map(k => [k, meta[k]]))
+    });
+  }
   res.json({ ok: true, meta });
 });
 

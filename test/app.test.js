@@ -435,18 +435,31 @@ test('local files: projects, payments, photos, reports, and the other JSON store
     assert.strictEqual((await api(base, 'DELETE', '/api/users/pelanggan')).status, 200);
     const relinked = (await api(base, 'GET', '/api/projects')).data.find(p => p.id === own.data.id);
     assert.deepStrictEqual(relinked.customers, [], 'deleting a customer unlinks it');
-    const pay = await api(base, 'PUT', '/api/paymeta', { an: 'Kudostack Uji', lokasi: { alamat: 'Jl. Uji', lat: -7.1, lng: 109.2, catatan: 'dekat' } });
+    // F3: payment details need the password again; every change is audited
+    assert.strictEqual((await api(base, 'PUT', '/api/paymeta', { an: 'Kudostack Uji' })).status, 403, 'no confirmPassword');
+    assert.strictEqual((await api(base, 'PUT', '/api/paymeta', { an: 'Kudostack Uji', confirmPassword: 'salah-salah-1' })).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/qris', { nama: 'X' })).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/qris/image', { image: 'data:image/png;base64,' + PNG.toString('base64') })).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/qris/image', { image: 'data:image/png;base64,' + Buffer.from('not a png at all').toString('base64'), confirmPassword: TEST_PASS })).status, 400, 'magic bytes checked');
+    assert.strictEqual((await api(base, 'PUT', '/api/paymeta', { lokasi: { alamat: 'Jl. Lokasi saja' } })).status, 200, 'location alone needs no password');
+    const pay = await api(base, 'PUT', '/api/paymeta', { an: 'Kudostack Uji', lokasi: { alamat: 'Jl. Uji', lat: -7.1, lng: 109.2, catatan: 'dekat' }, confirmPassword: TEST_PASS });
     assert.strictEqual(pay.status, 200);
     const payGet = await api(base, 'GET', '/api/paymeta');
     assert.strictEqual(payGet.data.an, 'Kudostack Uji');
     assert.strictEqual(payGet.data.lokasi.alamat, 'Jl. Uji');
     assert.strictEqual(payGet.data.ewallet.length, 4);
 
-    const qris = await api(base, 'POST', '/api/qris', { nama: 'KUDOSTACK UJI', nmid: 'NMID-1', tipe: 'Statis (selamanya)' });
+    const qris = await api(base, 'POST', '/api/qris', { nama: 'KUDOSTACK UJI', nmid: 'NMID-1', tipe: 'Statis (selamanya)', confirmPassword: TEST_PASS });
     assert.strictEqual(qris.data.meta.nama, 'KUDOSTACK UJI');
     assert.strictEqual(qris.data.meta.oleh, 'superadmin');
-    const qrisImg = await api(base, 'POST', '/api/qris/image', { image: 'data:image/png;base64,' + PNG.toString('base64') });
+    const qrisImg = await api(base, 'POST', '/api/qris/image', { image: 'data:image/png;base64,' + PNG.toString('base64'), confirmPassword: TEST_PASS });
     assert.strictEqual(qrisImg.status, 200);
+    const log = (await api(base, 'GET', '/api/audit')).data;
+    assert.deepStrictEqual(log.slice(0, 4).map(e => e.action), ['qris.image', 'qris.meta', 'paymeta', 'paymeta']);
+    assert.strictEqual(log[2].detail.before.an, 'Kudostack Official');
+    assert.strictEqual(log[2].detail.after.an, 'Kudostack Uji');
+    assert.strictEqual(log[1].actor, 'superadmin');
+    assert.ok(log.some(e => e.action === 'project.bayar'), 'bayar changes are audited too');
     const qrisGot = await af(base + '/qris.jpg?v=1');
     assert.deepStrictEqual(Buffer.from(await qrisGot.arrayBuffer()), PNG);
 
@@ -535,7 +548,7 @@ test('supabase: same features persist in Postgres documents and Storage', async 
     assert.strictEqual(finance.subarray(0, 4).toString(), '%PDF');
 
     await api(base, 'POST', '/api/users', { username: 'kasir', role: 'anggota' });
-    const qrisImg = await api(base, 'POST', '/api/qris/image', { image: 'data:image/png;base64,' + PNG.toString('base64') });
+    const qrisImg = await api(base, 'POST', '/api/qris/image', { image: 'data:image/png;base64,' + PNG.toString('base64'), confirmPassword: TEST_PASS });
     assert.strictEqual(qrisImg.status, 200);
     const qris = await af(base + '/qris.jpg');
     assert.deepStrictEqual(Buffer.from(await qris.arrayBuffer()), PNG);

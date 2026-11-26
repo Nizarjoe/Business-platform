@@ -4,3 +4,13 @@ uploads/
 *.log
 .env
 .env.*
+cf/assets.generated.mjs
+cf-dist/
+.wrangler/
+cf/.bundle/
+.bp-dev.toml
+.bundle/
+cf-dist-backup/
+cf/.bundle-backup/
+.bp-backup-dev.toml
+.bundle-backup/

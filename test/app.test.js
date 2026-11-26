@@ -167,10 +167,23 @@ function startSupabaseMock() {
   });
 }
 
-async function api(base, method, pathname, body) {
-  const res = await fetch(base + pathname, {
+const TEST_PASS = 'test-superadmin-pass';
+// One cookie jar per test file run; jar.cookie is the current session.
+const jar = { cookie: '' };
+async function af(url, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (jar.cookie && headers.cookie === undefined) headers.cookie = jar.cookie;
+  if (headers.origin === undefined) headers.origin = new URL(url).origin;
+  const res = await fetch(url, { ...opts, headers });
+  const set = res.headers.get('set-cookie');
+  if (set) jar.cookie = /Max-Age=0/.test(set) ? '' : set.split(';')[0];
+  return res;
+}
+
+async function api(base, method, pathname, body, extraHeaders) {
+  const res = await af(base + pathname, {
     method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+    headers: { ...(body === undefined ? {} : { 'content-type': 'application/json' }), ...(extraHeaders || {}) },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const text = await res.text();
@@ -179,10 +192,17 @@ async function api(base, method, pathname, body) {
   return { status: res.status, data, text, headers: res.headers };
 }
 
+async function loginAs(base, username, password) {
+  jar.cookie = '';
+  const r = await api(base, 'POST', '/api/login', { username, password });
+  assert.strictEqual(r.status, 200, 'login ' + username + ': ' + r.text);
+  return r;
+}
+
 async function uploadPhoto(base, id, kind) {
   const fd = new FormData();
   fd.append('photo', new Blob([PNG], { type: 'image/png' }), 'shot.png');
-  const res = await fetch(base + `/api/projects/${id}/photo?kind=${kind}`, { method: 'POST', body: fd });
+  const res = await af(base + `/api/projects/${id}/photo?kind=${kind}`, { method: 'POST', body: fd });
   const data = await res.json();
   return { status: res.status, data };
 }
@@ -202,13 +222,21 @@ test('local files: projects, payments, photos, reports, and the other JSON store
   const uploadsDir = path.join(dir, 'uploads');
   const qrisFile = path.join(dir, 'qris.jpg');
   const port = await freePort();
-  const env = { PORT: String(port), DATA_DIR: dataDir, UPLOADS_DIR: uploadsDir, QRIS_FILE: qrisFile };
+  const env = { PORT: String(port), DATA_DIR: dataDir, UPLOADS_DIR: uploadsDir, QRIS_FILE: qrisFile, BP_PASS_SUPERADMIN: TEST_PASS };
   let app;
   app = await startApp(env);
   const base = 'http://127.0.0.1:' + port;
   try {
     assert.match(app.log(), /local files/);
-    const home = await fetch(base + '/');
+    jar.cookie = '';
+    assert.strictEqual((await api(base, 'GET', '/api/projects')).status, 401, 'no session -> 401');
+    assert.strictEqual((await api(base, 'GET', '/api/export/projects.csv')).status, 401);
+    assert.strictEqual((await af(base + '/api/health')).status, 200);
+    assert.strictEqual((await api(base, 'POST', '/api/login', { username: 'superadmin' })).status, 401, 'no password -> 401');
+    assert.strictEqual((await api(base, 'POST', '/api/login', { username: 'superadmin', password: 'salah-sekali-123' })).status, 401);
+    assert.strictEqual((await api(base, 'POST', '/api/login', { username: 'admin', password: 'apa-saja-12345' })).status, 401, 'admin has no password yet');
+    await loginAs(base, 'SuperAdmin', TEST_PASS);
+    const home = await af(base + '/');
     assert.strictEqual(home.status, 200);
     assert.match(await home.text(), /Kudostack/);
 
@@ -230,6 +258,15 @@ test('local files: projects, payments, photos, reports, and the other JSON store
 
     const created = await api(base, 'GET', '/api/projects');
     assert.strictEqual(created.data.length, 5);
+    // server-side search + paging (F6/F10)
+    assert.deepStrictEqual((await api(base, 'GET', '/api/projects?q=SATU')).data.map(p => p.id), [first.data.id]);
+    assert.ok((await api(base, 'GET', '/api/projects?layanan=Software')).data.every(p => p.layanan === 'Software'));
+    assert.deepStrictEqual((await api(base, 'GET', '/api/projects?status=Baru%20Masuk&pic=rizky')).data.map(p => p.id), [first.data.id]);
+    const paged = await api(base, 'GET', '/api/projects?limit=2&offset=1');
+    assert.strictEqual(paged.data.length, 2);
+    assert.strictEqual(paged.headers.get('x-total-count'), '5');
+    assert.deepStrictEqual((await api(base, 'GET', '/api/transactions?jenis=Uang%20Keluar')).data.map(t => t.id), ['TRX-002']);
+    assert.deepStrictEqual((await api(base, 'GET', '/api/transactions?q=thermal')).data.map(t => t.id), ['TRX-002']);
 
     const lunas = await api(base, 'PUT', '/api/projects/' + first.data.id, { bayar: 'Lunas' });
     assert.strictEqual(lunas.status, 200);
@@ -249,7 +286,7 @@ test('local files: projects, payments, photos, reports, and the other JSON store
     assert.strictEqual(stats.data.months.length, 6);
     assert.ok(stats.data.uangMasuk >= 750000);
 
-    const beforePdf = await fetch(base + '/api/pdf/project/' + second.data.id);
+    const beforePdf = await af(base + '/api/pdf/project/' + second.data.id);
     const beforeBuf = Buffer.from(await beforePdf.arrayBuffer());
     assert.strictEqual(beforePdf.status, 200);
     assert.strictEqual(beforeBuf.subarray(0, 4).toString(), '%PDF');
@@ -257,28 +294,28 @@ test('local files: projects, payments, photos, reports, and the other JSON store
     const photo = await uploadPhoto(base, second.data.id, 'in');
     assert.strictEqual(photo.status, 200);
     assert.match(photo.data.url, /^\/uploads\//);
-    const stored = await fetch(base + photo.data.url);
+    const stored = await af(base + photo.data.url);
     assert.strictEqual(stored.status, 200);
     assert.deepStrictEqual(Buffer.from(await stored.arrayBuffer()), PNG);
 
-    const afterPdf = await fetch(base + '/api/pdf/project/' + second.data.id);
+    const afterPdf = await af(base + '/api/pdf/project/' + second.data.id);
     const afterBuf = Buffer.from(await afterPdf.arrayBuffer());
     assert.strictEqual(afterBuf.subarray(0, 4).toString(), '%PDF');
     assert.ok(afterBuf.length > beforeBuf.length, 'PDF should embed the uploaded photo');
 
     for (const route of ['/api/pdf/projects', '/api/pdf/finance?periode=1m', '/api/pdf/master']) {
-      const pdf = await fetch(base + route);
+      const pdf = await af(base + route);
       const buf = Buffer.from(await pdf.arrayBuffer());
       assert.strictEqual(pdf.status, 200, route);
       assert.strictEqual(buf.subarray(0, 4).toString(), '%PDF', route);
     }
 
-    const csv = await fetch(base + '/api/export/projects.csv');
+    const csv = await af(base + '/api/export/projects.csv');
     const csvText = await csv.text();
     assert.match(csv.headers.get('content-type'), /text\/csv/);
     assert.match(csvText, /KDS-001/);
     assert.match(csvText, /Servis Laptop ASUS ROG/);
-    const trxCsv = await fetch(base + '/api/export/transactions.csv');
+    const trxCsv = await af(base + '/api/export/transactions.csv');
     assert.match(await trxCsv.text(), /TRX-001/);
     const projectsJson = await api(base, 'GET', '/api/export/projects.json');
     assert.ok(projectsJson.data.some(p => p.id === 'KDS-001'));
@@ -287,43 +324,259 @@ test('local files: projects, payments, photos, reports, and the other JSON store
 
     const gonePhoto = await api(base, 'DELETE', `/api/projects/${second.data.id}/photo?kind=in&url=${encodeURIComponent(photo.data.url)}`);
     assert.strictEqual(gonePhoto.status, 200);
-    assert.strictEqual((await fetch(base + photo.data.url)).status, 404);
+    assert.strictEqual((await af(base + photo.data.url)).status, 404);
     const afterDelete = (await api(base, 'GET', '/api/projects')).data.find(p => p.id === second.data.id);
     assert.deepStrictEqual(afterDelete.fotoIn, []);
 
-    assert.strictEqual((await api(base, 'POST', '/api/login', { username: 'tidak-ada' })).status, 401);
-    const login = await api(base, 'POST', '/api/login', { username: 'SuperAdmin' });
-    assert.strictEqual(login.data.role, 'superadmin');
-    const added = await api(base, 'POST', '/api/users', { actor: 'superadmin', username: 'Kasir', role: 'anggota' });
+    assert.strictEqual((await api(base, 'POST', '/api/login', { username: 'tidak-ada', password: 'x' })).status, 401);
+    const me = await api(base, 'GET', '/api/me');
+    assert.strictEqual(me.data.role, 'superadmin');
+    // cross-site writes are refused even with a valid session
+    assert.strictEqual((await api(base, 'POST', '/api/transactions', { jenis: 'Uang Masuk', nominal: 1 }, { origin: 'https://evil.example' })).status, 403);
+    const added = await api(base, 'POST', '/api/users', { username: 'Kasir', role: 'anggota' });
     assert.strictEqual(added.status, 200);
     assert.strictEqual(added.data.username, 'kasir');
     const users = await api(base, 'GET', '/api/users');
-    assert.ok(users.data.some(u => u.username === 'kasir' && u.role === 'anggota'));
-    assert.strictEqual((await api(base, 'DELETE', '/api/users/kasir?actor=superadmin')).status, 200);
+    assert.ok(users.data.some(u => u.username === 'kasir' && u.role === 'anggota' && u.hasPassword === false));
+    assert.ok(users.data.every(u => u.pass === undefined), 'password hashes never leave the server');
+    assert.strictEqual((await api(base, 'PUT', '/api/users/kasir/password', { password: 'pendek' })).status, 400);
+    for (const [name, role] of [['admin', null], ['tekno', 'anggota'], ['sosmed', 'medsos'], ['pelanggan', 'customer']]) {
+      if (role) assert.strictEqual((await api(base, 'POST', '/api/users', { username: name, role })).status, 200);
+      assert.strictEqual((await api(base, 'PUT', `/api/users/${name}/password`, { password: name + '-pass-123' })).status, 200);
+    }
+    const saCookie = jar.cookie;
+    // F2: link a customer account to its project; only customer accounts can be linked
+    const own = await api(base, 'POST', '/api/projects', { nama: 'Milik pelanggan', layanan: 'Hardware', pic: 'Tekno', klien: 'Pak Pelanggan', wa: '0812', biaya: 123000, customers: ['Pelanggan'] });
+    assert.strictEqual(own.status, 200, own.text);
+    assert.deepStrictEqual(own.data.customers, ['pelanggan']);
+    assert.strictEqual((await api(base, 'PUT', `/api/projects/${own.data.id}/customers`, { customers: ['tekno'] })).status, 400, 'anggota is not a customer');
+    assert.strictEqual((await api(base, 'PUT', `/api/projects/${own.data.id}/customers`, { customers: 'pelanggan' })).status, 400);
+    assert.strictEqual((await api(base, 'DELETE', '/api/users/kasir')).status, 200);
     assert.ok(!(await api(base, 'GET', '/api/users')).data.some(u => u.username === 'kasir'));
 
-    assert.strictEqual((await api(base, 'POST', '/api/plans', { actor: 'anggota', tanggal: '2026-11-12', judul: 'Nope' })).status, 403);
-    const plan = await api(base, 'POST', '/api/plans', { actor: 'medsos', tanggal: '2026-11-12', judul: 'Before after', platform: 'Instagram' });
-    assert.strictEqual(plan.status, 403);
-    const planOk = await api(base, 'POST', '/api/plans', { actor: 'admin', tanggal: '2026-11-12', judul: 'Before after', platform: 'Instagram', caption: 'halo' });
+    // admin: no user admin, no payment details, no bayar change; Kas ok
+    await loginAs(base, 'admin', 'admin-pass-123');
+    assert.strictEqual((await api(base, 'GET', '/api/users')).status, 403);
+    assert.strictEqual((await api(base, 'PUT', '/api/paymeta', { an: 'Penipu' })).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/qris', { nama: 'X' })).status, 403);
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + second.data.id, { bayar: 'Lunas' })).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/projects', { nama: 'A', layanan: 'DLL', pic: 'B', bayar: 'Lunas' })).status, 403);
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + second.data.id, { output: 'oleh admin', bayar: 'Belum Bayar' })).status, 200, 'unchanged bayar is fine');
+    assert.strictEqual((await api(base, 'GET', '/api/transactions')).status, 200);
+    const link = await api(base, 'PUT', `/api/projects/${own.data.id}/customers`, { customers: ['pelanggan'] });
+    assert.strictEqual(link.status, 200, 'admin may link customers');
+    assert.deepStrictEqual(link.data.customers, ['pelanggan']);
+    const planOk = await api(base, 'POST', '/api/plans', { tanggal: '2026-11-12', judul: 'Before after', platform: 'Instagram', caption: 'halo' });
     assert.strictEqual(planOk.status, 200);
-    const planPut = await api(base, 'PUT', '/api/plans/' + planOk.data.id, { actor: 'admin', status: 'Terjadwal' });
-    assert.strictEqual(planPut.data.status, 'Terjadwal');
-    assert.strictEqual((await api(base, 'DELETE', '/api/plans/' + planOk.data.id + '?actor=admin')).status, 200);
+    assert.strictEqual(planOk.data.dibuat, 'admin');
+    assert.strictEqual((await api(base, 'PUT', '/api/plans/' + planOk.data.id, { status: 'Terjadwal' })).status, 400, 'F11 unknown status');
+    const planPut = await api(base, 'PUT', '/api/plans/' + planOk.data.id, { status: 'Disetujui' });
+    assert.strictEqual(planPut.data.status, 'Disetujui');
+    assert.strictEqual(planPut.data.disetujuiOleh, 'admin');
+    assert.strictEqual((await api(base, 'DELETE', '/api/plans/' + planOk.data.id)).status, 200);
 
-    const pay = await api(base, 'PUT', '/api/paymeta?actor=admin', { an: 'Kudostack Uji', lokasi: { alamat: 'Jl. Uji', lat: -7.1, lng: 109.2, catatan: 'dekat' } });
+    // anggota (teknisi): projects yes, Kas/plans/exports no, finance hidden in stats
+    await loginAs(base, 'tekno', 'tekno-pass-123');
+    const tp = await api(base, 'GET', '/api/projects');
+    assert.strictEqual(tp.status, 200);
+    assert.deepStrictEqual(tp.data.map(p => p.id), [own.data.id], 'anggota sees only projects where PIC = username');
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + second.data.id, { output: 'bukan punya saya' })).status, 404);
+    assert.strictEqual((await api(base, 'GET', '/api/pdf/project/' + second.data.id)).status, 404);
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + own.data.id, { customers: [] })).status, 403, 'anggota cannot relink');
+    assert.strictEqual((await api(base, 'PUT', `/api/projects/${own.data.id}/customers`, { customers: [] })).status, 403);
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + own.data.id, { output: 'dikerjakan tekno' })).status, 200);
+    const mine = await api(base, 'POST', '/api/projects', { nama: 'Dibuat tekno', layanan: 'DLL', pic: 'Orang Lain' });
+    assert.strictEqual(mine.status, 200);
+    assert.ok((await api(base, 'GET', '/api/projects')).data.some(p => p.id === mine.data.id), 'creator keeps access');
+    assert.strictEqual((await api(base, 'POST', '/api/projects', { nama: 'X', layanan: 'DLL', pic: 'Y', customers: ['pelanggan'] })).status, 403);
+    assert.strictEqual((await api(base, 'GET', '/api/transactions')).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/transactions', { jenis: 'Uang Masuk', nominal: 1 })).status, 403);
+    assert.strictEqual((await api(base, 'GET', '/api/export/transactions.csv')).status, 403);
+    assert.strictEqual((await api(base, 'GET', '/api/pdf/finance?periode=all')).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/plans', { tanggal: '2026-11-12', judul: 'Nope' })).status, 403);
+    assert.strictEqual((await api(base, 'DELETE', '/api/projects/' + second.data.id)).status, 403);
+    const st = await api(base, 'GET', '/api/stats');
+    assert.strictEqual(st.data.finance, false);
+    assert.strictEqual(st.data.saldo, null);
+    assert.deepStrictEqual(st.data.months, []);
+
+    // medsos: content yes, Kas and project writes no
+    await loginAs(base, 'sosmed', 'sosmed-pass-123');
+    assert.strictEqual((await api(base, 'GET', '/api/transactions')).status, 403);
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + second.data.id, { output: 'x' })).status, 403);
+    const plan = await api(base, 'POST', '/api/plans', { tanggal: '2026-11-12', judul: 'Before after', platform: 'Instagram' });
+    assert.strictEqual(plan.status, 200);
+    // F11: medsos submits, cannot approve or publish unapproved content
+    assert.strictEqual((await api(base, 'PUT', '/api/plans/' + plan.data.id, { status: 'Tayang' })).status, 403);
+    assert.strictEqual((await api(base, 'PUT', '/api/plans/' + plan.data.id, { status: 'Disetujui' })).status, 403);
+    assert.strictEqual((await api(base, 'PUT', '/api/plans/' + plan.data.id, { status: 'Review' })).data.status, 'Review');
+    assert.ok((await api(base, 'GET', '/api/reminders')).data.some(r => r.type === 'konten' && r.id === plan.data.id), 'F9 overdue content reminder');
+
+    // customer: trimmed projects, nothing else private
+    await loginAs(base, 'pelanggan', 'pelanggan-pass-123');
+    const cp = await api(base, 'GET', '/api/projects');
+    assert.strictEqual(cp.status, 200);
+    assert.deepStrictEqual(cp.data.map(p => p.id), [own.data.id], 'customer sees only linked projects');
+    assert.ok(cp.data.every(p => p.klien === undefined && p.wa === undefined && p.signature === undefined && p.customers === undefined && p.reportTeknisi === undefined));
+    assert.strictEqual(cp.data[0].biaya, 123000);
+    assert.strictEqual((await api(base, 'GET', '/api/pdf/project/' + own.data.id)).status, 200);
+    assert.strictEqual((await api(base, 'GET', '/api/pdf/project/' + second.data.id)).status, 404);
+    assert.strictEqual((await api(base, 'PUT', '/api/projects/' + own.data.id, { output: 'x' })).status, 403);
+    for (const u of ['/api/transactions', '/api/stats', '/api/users', '/api/export/projects.csv', '/api/plans', '/api/send-wa/outbox'])
+      assert.strictEqual((await api(base, 'GET', u)).status, 403, u);
+    assert.strictEqual((await api(base, 'GET', '/api/qris')).status, 200);
+
+    // own password change ends other sessions
+    const custCookie = jar.cookie;
+    await loginAs(base, 'pelanggan', 'pelanggan-pass-123');
+    assert.strictEqual((await api(base, 'POST', '/api/me/password', { current: 'salah', next: 'pelanggan-baru-123' })).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/me/password', { current: 'pelanggan-pass-123', next: 'pelanggan-baru-123' })).status, 200);
+    assert.strictEqual((await api(base, 'GET', '/api/me')).status, 200, 'current session survives');
+    assert.strictEqual((await api(base, 'GET', '/api/me', undefined, { cookie: custCookie })).status, 401, 'older session revoked');
+    assert.strictEqual((await api(base, 'POST', '/api/logout')).status, 200);
+    assert.strictEqual(jar.cookie, '');
+    assert.strictEqual((await api(base, 'GET', '/api/me')).status, 401);
+
+    // back to superadmin (its session is still valid)
+    jar.cookie = saCookie;
+    assert.strictEqual((await api(base, 'DELETE', '/api/users/pelanggan')).status, 200);
+    const relinked = (await api(base, 'GET', '/api/projects')).data.find(p => p.id === own.data.id);
+    assert.deepStrictEqual(relinked.customers, [], 'deleting a customer unlinks it');
+    // F3: payment details need the password again; every change is audited
+    assert.strictEqual((await api(base, 'PUT', '/api/paymeta', { an: 'Kudostack Uji' })).status, 403, 'no confirmPassword');
+    assert.strictEqual((await api(base, 'PUT', '/api/paymeta', { an: 'Kudostack Uji', confirmPassword: 'salah-salah-1' })).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/qris', { nama: 'X' })).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/qris/image', { image: 'data:image/png;base64,' + PNG.toString('base64') })).status, 403);
+    assert.strictEqual((await api(base, 'POST', '/api/qris/image', { image: 'data:image/png;base64,' + Buffer.from('not a png at all').toString('base64'), confirmPassword: TEST_PASS })).status, 400, 'magic bytes checked');
+    assert.strictEqual((await api(base, 'PUT', '/api/paymeta', { lokasi: { alamat: 'Jl. Lokasi saja' } })).status, 200, 'location alone needs no password');
+    const pay = await api(base, 'PUT', '/api/paymeta', { an: 'Kudostack Uji', lokasi: { alamat: 'Jl. Uji', lat: -7.1, lng: 109.2, catatan: 'dekat' }, confirmPassword: TEST_PASS });
     assert.strictEqual(pay.status, 200);
     const payGet = await api(base, 'GET', '/api/paymeta');
     assert.strictEqual(payGet.data.an, 'Kudostack Uji');
     assert.strictEqual(payGet.data.lokasi.alamat, 'Jl. Uji');
     assert.strictEqual(payGet.data.ewallet.length, 4);
 
-    const qris = await api(base, 'POST', '/api/qris?actor=admin', { nama: 'KUDOSTACK UJI', nmid: 'NMID-1', tipe: 'Statis (selamanya)' });
+    const qris = await api(base, 'POST', '/api/qris', { nama: 'KUDOSTACK UJI', nmid: 'NMID-1', tipe: 'Statis (selamanya)', confirmPassword: TEST_PASS });
     assert.strictEqual(qris.data.meta.nama, 'KUDOSTACK UJI');
-    const qrisImg = await api(base, 'POST', '/api/qris/image?actor=admin', { image: 'data:image/png;base64,' + PNG.toString('base64') });
+    assert.strictEqual(qris.data.meta.oleh, 'superadmin');
+    const qrisImg = await api(base, 'POST', '/api/qris/image', { image: 'data:image/png;base64,' + PNG.toString('base64'), confirmPassword: TEST_PASS });
     assert.strictEqual(qrisImg.status, 200);
-    const qrisGot = await fetch(base + '/qris.jpg?v=1');
+    const log = (await api(base, 'GET', '/api/audit')).data;
+    assert.deepStrictEqual(log.slice(0, 4).map(e => e.action), ['qris.image', 'qris.meta', 'paymeta', 'paymeta']);
+    assert.strictEqual(log[2].detail.before.an, 'Kudostack Official');
+    assert.strictEqual(log[2].detail.after.an, 'Kudostack Uji');
+    assert.strictEqual(log[1].actor, 'superadmin');
+    assert.ok((await api(base, 'GET', '/api/audit?aksi=project.bayar')).data.length > 0, 'bayar changes are audited too');
+    const qrisGot = await af(base + '/qris.jpg?v=1');
     assert.deepStrictEqual(Buffer.from(await qrisGot.arrayBuffer()), PNG);
+
+    // F11: admin side of the approval flow; edits after approval go back to review
+    const plans = (await api(base, 'GET', '/api/plans')).data;
+    const rv = plans.find(p => p.status === 'Review');
+    assert.ok((await api(base, 'GET', '/api/reminders')).data.some(r => r.type === 'persetujuan' && r.id === rv.id));
+    assert.strictEqual((await api(base, 'PUT', '/api/plans/' + rv.id, { status: 'Disetujui' })).data.status, 'Disetujui');
+
+    // F7: staged payments with numbered invoices
+    const pj = await api(base, 'POST', '/api/projects', { nama: 'Termin', layanan: 'Software', pic: 'Dina', biaya: 1000000 });
+    const before = (await api(base, 'GET', '/api/transactions')).data.length;
+    assert.strictEqual((await api(base, 'POST', `/api/projects/${pj.data.id}/payments`, { jenis: 'Cicil', nominal: 1 })).status, 400);
+    const dp = await api(base, 'POST', `/api/projects/${pj.data.id}/payments`, { jenis: 'DP', nominal: 400000, tgl: '2026-11-20' });
+    assert.strictEqual(dp.status, 200, dp.text);
+    assert.match(dp.data.pay.no, /^INV-202611-\d{4}$/);
+    assert.strictEqual(dp.data.bayar, 'DP');
+    assert.strictEqual((await api(base, 'POST', `/api/projects/${pj.data.id}/payments`, { jenis: 'Pelunasan', nominal: 700000 })).status, 400, 'over-payment refused');
+    const pel = await api(base, 'POST', `/api/projects/${pj.data.id}/payments`, { jenis: 'Pelunasan', nominal: 600000 });
+    assert.strictEqual(pel.data.bayar, 'Lunas');
+    assert.notStrictEqual(pel.data.pay.no, dp.data.pay.no);
+    const trxNow = (await api(base, 'GET', '/api/transactions')).data;
+    assert.strictEqual(trxNow.length, before + 2, 'one Kas row per payment');
+    assert.ok(trxNow.some(t => t.nominal === 400000 && t.ket.includes(dp.data.pay.no)));
+    const inv = await af(base + `/api/pdf/invoice/${pj.data.id}/${dp.data.pay.id}`);
+    assert.strictEqual(Buffer.from(await inv.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+    assert.strictEqual((await api(base, 'DELETE', `/api/projects/${pj.data.id}/payments/${pel.data.pay.id}`)).data.bayar, 'DP');
+    assert.strictEqual((await api(base, 'GET', '/api/transactions')).data.length, before + 1);
+    // manual Lunas after a DP books only the remainder
+    await api(base, 'PUT', '/api/projects/' + pj.data.id, { bayar: 'Lunas' });
+    assert.ok((await api(base, 'GET', '/api/transactions')).data.some(t => t.nominal === 600000 && t.ket.includes(pj.data.id)));
+
+    // F12 profit report, F13 Excel
+    const rep = (await api(base, 'GET', '/api/reports/profit?dari=2026-11-01')).data;
+    assert.ok(rep.perKategori.find(k => k.kategori === 'Software').masuk >= 1000000);
+    assert.ok(rep.perPic.find(r => r.pic === 'Dina').terbayar >= 1000000);
+    assert.strictEqual(rep.total.laba, rep.total.masuk - rep.total.keluar);
+    const xl = Buffer.from(await (await af(base + '/api/export/projects.xlsx')).arrayBuffer());
+    assert.strictEqual(xl.subarray(0, 2).toString(), 'PK');
+    assert.ok(xl.length > 500);
+
+    // F14 attachments: content checked, served only through the project route
+    const up = async (name, buf, type) => { const fd = new FormData(); fd.append('file', new Blob([buf], { type }), name); const r = await af(base + `/api/projects/${pj.data.id}/files`, { method: 'POST', body: fd }); return { status: r.status, data: await r.json() }; };
+    assert.strictEqual((await up('virus.pdf', Buffer.from('MZ not a pdf'), 'application/pdf')).status, 400);
+    const pdfDoc = await up('Surat jalan.pdf', Buffer.from('%PDF-1.4 test'), 'application/pdf');
+    assert.strictEqual(pdfDoc.status, 200, JSON.stringify(pdfDoc.data));
+    assert.strictEqual(pdfDoc.data.url, undefined);
+    const listed = (await api(base, 'GET', '/api/projects')).data.find(p => p.id === pj.data.id);
+    assert.ok(listed.lampiran.length === 1 && listed.lampiran[0].url === undefined);
+    const got = await af(base + `/api/projects/${pj.data.id}/files/${pdfDoc.data.id}`);
+    assert.strictEqual(got.status, 200);
+    assert.match(got.headers.get('content-disposition'), /attachment/);
+    assert.strictEqual(Buffer.from(await got.arrayBuffer()).toString(), '%PDF-1.4 test');
+    assert.strictEqual((await api(base, 'DELETE', `/api/projects/${pj.data.id}/files/${pdfDoc.data.id}`)).status, 200);
+    assert.strictEqual((await af(base + `/api/projects/${pj.data.id}/files/${pdfDoc.data.id}`)).status, 404);
+
+    // Documentation: chunked upload, magic bytes, Range across chunks, delete
+    const CH = 8 * 1024 * 1024;
+    const vid = Buffer.alloc(CH + 1000);
+    Buffer.from('\x00\x00\x00\x18ftypisom', 'latin1').copy(vid);
+    for (let i = 12; i < vid.length; i++) vid[i] = i % 251;
+    const start = await api(base, 'POST', `/api/projects/${pj.data.id}/media`, { name: 'servis.mp4', type: 'video/mp4', size: vid.length, caption: 'Proses servis', tgl: '2026-11-20' });
+    assert.strictEqual(start.status, 200, start.text);
+    assert.strictEqual(start.data.chunks, 2);
+    const putChunk = (id, n, buf) => af(base + `/api/projects/${pj.data.id}/media/${id}/chunks/${n}`, { method: 'PUT', headers: { 'content-type': 'application/octet-stream' }, body: buf });
+    assert.strictEqual((await putChunk(start.data.id, 1, vid.subarray(CH, CH + 10))).status, 400, 'wrong chunk length');
+    assert.strictEqual((await api(base, 'POST', `/api/projects/${pj.data.id}/media/${start.data.id}/complete`)).status, 400, 'incomplete');
+    assert.strictEqual((await putChunk(start.data.id, 0, vid.subarray(0, CH))).status, 200);
+    assert.strictEqual((await putChunk(start.data.id, 1, vid.subarray(CH))).status, 200);
+    const done = await api(base, 'POST', `/api/projects/${pj.data.id}/media/${start.data.id}/complete`);
+    assert.strictEqual(done.status, 200, done.text);
+    assert.strictEqual(done.data.kind, 'video');
+    const rng = await af(base + `/api/projects/${pj.data.id}/media/${start.data.id}/raw`, { headers: { range: `bytes=${CH - 5}-${CH + 4}` } });
+    assert.strictEqual(rng.status, 206);
+    assert.strictEqual(rng.headers.get('content-range'), `bytes ${CH - 5}-${CH + 4}/${vid.length}`);
+    assert.ok(Buffer.from(await rng.arrayBuffer()).equals(vid.subarray(CH - 5, CH + 5)));
+    const full = await af(base + `/api/projects/${pj.data.id}/media/${start.data.id}/raw`);
+    assert.strictEqual(full.status, 200);
+    assert.ok(Buffer.from(await full.arrayBuffer()).equals(vid));
+    assert.strictEqual((await af(base + `/api/projects/${pj.data.id}/media/${start.data.id}/raw`, { headers: { range: 'bytes=99999999-' } })).status, 416);
+    const fake = await api(base, 'POST', `/api/projects/${pj.data.id}/media`, { name: 'x.jpg', type: 'image/jpeg', size: 20 });
+    assert.strictEqual((await putChunk(fake.data.id, 0, Buffer.from('<html>not an image!'.padEnd(20)))).status, 400, 'magic bytes');
+    assert.strictEqual((await api(base, 'POST', `/api/projects/${pj.data.id}/media`, { name: 'x.exe', type: 'application/x-msdownload', size: 20 })).status, 400);
+    assert.strictEqual((await api(base, 'POST', `/api/projects/${pj.data.id}/media`, { name: 'big.mp4', type: 'video/mp4', size: 101 * 1024 * 1024 })).status, 413);
+    const ml = await api(base, 'GET', `/api/projects/${pj.data.id}/media`);
+    assert.deepStrictEqual(ml.data.map(m => [m.name, m.caption, m.by]), [['servis.mp4', 'Proses servis', 'superadmin']]);
+    assert.strictEqual((await api(base, 'GET', '/api/projects')).data.find(p => p.id === pj.data.id).dokumentasi, 1);
+    assert.strictEqual((await api(base, 'PUT', `/api/projects/${pj.data.id}/media/${start.data.id}`, { caption: 'Sesudah servis' })).data.caption, 'Sesudah servis');
+    assert.strictEqual((await api(base, 'DELETE', `/api/projects/${pj.data.id}/media/${start.data.id}`)).status, 200);
+    assert.strictEqual((await api(base, 'GET', `/api/projects/${pj.data.id}/media`)).data.length, 0);
+
+    // Activity log: writes, logins, filters, paging, no secrets
+    const act = await api(base, 'GET', '/api/audit?limit=500');
+    const actions = act.data.map(e => e.action);
+    for (const a of ['auth.login', 'project.tambah', 'kas.tambah', 'dokumentasi.upload', 'dokumentasi.ubah', 'dokumentasi.hapus', 'lampiran.upload', 'invoice.tambah', 'user.password.diatur', 'export.data'])
+      assert.ok(actions.includes(a), 'activity has ' + a + ' (' + [...new Set(actions)].join() + ')');
+    assert.ok(act.data.every(e => e.ip && 'role' in e && 'summary' in e));
+    assert.ok(!/salah-sekali-123|-pass-123/.test(JSON.stringify(act.data)), 'no password in the log');
+    const pg1 = await api(base, 'GET', '/api/audit?limit=2&aksi=dokumentasi');
+    assert.strictEqual(pg1.data.length, 2);
+    assert.ok(Number(pg1.headers.get('x-total-count')) >= 3);
+    assert.ok(pg1.data.every(e => e.action.startsWith('dokumentasi') && e.entity === 'dokumentasi'));
+    assert.strictEqual((await api(base, 'GET', '/api/audit?user=tidakada')).data.length, 0);
+    assert.strictEqual((await api(base, 'GET', '/api/audit?dari=2099-01-01')).data.length, 0);
+
+    // login rate limit (per username)
+    let last;
+    for (let i = 0; i < 9; i++) last = await api(base, 'POST', '/api/login', { username: 'sosmed', password: 'salah-' + i }, { cookie: '' });
+    assert.strictEqual(last.status, 429);
+    jar.cookie = saCookie;
 
     const wa = await api(base, 'POST', '/api/send-wa', { to: '081234', message: 'Halo admin +62 851-6585-9837' });
     assert.strictEqual(wa.status, 200);
@@ -333,6 +586,7 @@ test('local files: projects, payments, photos, reports, and the other JSON store
 
     assert.strictEqual((await api(base, 'DELETE', '/api/projects/' + second.data.id)).status, 200);
     assert.strictEqual((await api(base, 'GET', '/api/nope')).status, 404);
+    assert.strictEqual((await api(base, 'GET', '/api/backups')).status, 501, 'backups are Cloudflare-only');
 
     await app.stop();
     app = await startApp(env);
@@ -358,7 +612,8 @@ test('supabase: same features persist in Postgres documents and Storage', async 
     QRIS_FILE: path.join(dir, 'qris.jpg'),
     SUPABASE_URL: mock.url,
     SUPABASE_SERVICE_ROLE_KEY: SERVICE_KEY,
-    SUPABASE_BUCKET: 'uploads'
+    SUPABASE_BUCKET: 'uploads',
+    BP_PASS_SUPERADMIN: TEST_PASS
   };
   let app;
   app = await startApp(env);
@@ -369,9 +624,10 @@ test('supabase: same features persist in Postgres documents and Storage', async 
     assert.ok(mock.calls.every(c => !c.apikey || c.apikey === SERVICE_KEY));
     assert.ok(mock.calls.some(c => c.authorization === 'Bearer ' + SERVICE_KEY));
 
-    const home = await (await fetch(base + '/')).text();
+    const home = await (await af(base + '/')).text();
     assert.ok(!home.includes(SERVICE_KEY));
 
+    await loginAs(base, 'superadmin', TEST_PASS);
     const seeded = await api(base, 'GET', '/api/projects');
     assert.strictEqual(seeded.data.length, 3);
     assert.ok(mock.docs.has('main'));
@@ -385,26 +641,26 @@ test('supabase: same features persist in Postgres documents and Storage', async 
     const trx = await api(base, 'GET', '/api/transactions');
     assert.ok(trx.data.some(t => t.ket.includes(created.data.id)));
 
-    const beforePdf = Buffer.from(await (await fetch(base + '/api/pdf/project/' + created.data.id)).arrayBuffer());
+    const beforePdf = Buffer.from(await (await af(base + '/api/pdf/project/' + created.data.id)).arrayBuffer());
     const photo = await uploadPhoto(base, created.data.id, 'out');
     assert.strictEqual(photo.status, 200);
     assert.match(photo.data.url, /^http:\/\/127\.0\.0\.1:\d+\/storage\/v1\/object\/public\/uploads\/photos\//);
     const stored = await fetch(photo.data.url);
     assert.strictEqual(stored.status, 200);
     assert.deepStrictEqual(Buffer.from(await stored.arrayBuffer()), PNG);
-    const afterPdf = Buffer.from(await (await fetch(base + '/api/pdf/project/' + created.data.id)).arrayBuffer());
+    const afterPdf = Buffer.from(await (await af(base + '/api/pdf/project/' + created.data.id)).arrayBuffer());
     assert.strictEqual(afterPdf.subarray(0, 4).toString(), '%PDF');
     assert.ok(afterPdf.length > beforePdf.length);
 
-    const csv = await (await fetch(base + '/api/export/projects.csv')).text();
+    const csv = await (await af(base + '/api/export/projects.csv')).text();
     assert.match(csv, /Remote/);
-    const finance = Buffer.from(await (await fetch(base + '/api/pdf/finance?periode=all')).arrayBuffer());
+    const finance = Buffer.from(await (await af(base + '/api/pdf/finance?periode=all')).arrayBuffer());
     assert.strictEqual(finance.subarray(0, 4).toString(), '%PDF');
 
-    await api(base, 'POST', '/api/users', { actor: 'superadmin', username: 'kasir', role: 'anggota' });
-    const qrisImg = await api(base, 'POST', '/api/qris/image?actor=superadmin', { image: 'data:image/png;base64,' + PNG.toString('base64') });
+    await api(base, 'POST', '/api/users', { username: 'kasir', role: 'anggota' });
+    const qrisImg = await api(base, 'POST', '/api/qris/image', { image: 'data:image/png;base64,' + PNG.toString('base64'), confirmPassword: TEST_PASS });
     assert.strictEqual(qrisImg.status, 200);
-    const qris = await fetch(base + '/qris.jpg');
+    const qris = await af(base + '/qris.jpg');
     assert.deepStrictEqual(Buffer.from(await qris.arrayBuffer()), PNG);
     assert.ok(mock.docs.get('qris-meta').imageUrl.includes('/storage/v1/object/public/uploads/qris/current'));
 

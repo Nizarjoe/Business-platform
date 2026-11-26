@@ -1,0 +1,18 @@
+name = "business-platform"
+pages_build_output_dir = "cf-dist"
+compatibility_date = "2025-11-01"
+compatibility_flags = ["nodejs_compat", "enable_nodejs_http_modules", "enable_nodejs_http_server_modules"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "business-platform"
+database_id = "2d6559b2-7870-4a81-bb76-a69e93d54c63"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "FILES"
+id = "b1d129c3f7b24334975bc79071576193"
+
+[[kv_namespaces]]
+binding = "BACKUPS"
+id = "97d1b044790143289df2ddb801f26190"

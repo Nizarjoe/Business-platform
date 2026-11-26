@@ -48,3 +48,80 @@ The script upserts `data/db.json`, imports the other JSON files in `data/` when 
 | `SUPABASE_SERVICE_ROLE_KEY` | for hosted mode | Server-only service role key |
 | `SUPABASE_BUCKET` | no | Storage bucket, default `uploads` |
 | `PORT` | set by Render | HTTP port. Local default is 3000 |
+
+## Deploy on Cloudflare Pages (D1 + KV)
+
+Cloudflare mode needs no Supabase key. `cf/entry.mjs` runs the same Express app through `httpServerHandler`, stores the JSON documents in D1 (`DB`, table `app_documents` from `migrations/`) and photos/QRIS in KV (`FILES`, served at `/files/...`).
+
+```bash
+node scripts/build-cf.mjs          # writes cf-dist/_worker.js (public/ embedded)
+npx wrangler d1 migrations apply business-platform --remote
+npx wrangler pages deploy cf-dist --project-name business-platform
+```
+
+The Pages project needs compatibility date `2025-11-01`, flags `nodejs_compat`, `enable_nodejs_http_modules`, `enable_nodejs_http_server_modules`, a D1 binding `DB` and a KV binding `FILES`.
+
+### Migrasi tabel D1 (S7/F6)
+
+Awalnya semua data Cloudflare ada di tabel `app_documents` (satu baris JSON per dokumen).
+Migrasi `0003_tables.sql` menambah tabel `projects`, `transactions`, `plans`, `users`,
+`settings`, dan `audit`. Aplikasi tetap membaca `app_documents` sampai diminta pindah:
+
+```sql
+insert into settings (key, value) values ('storage', 'migrate');
+```
+
+Request berikutnya menyalin semua dokumen ke tabel dalam satu batch yang dijaga
+`updated_at` tiap dokumen, membaca ulang hasilnya, membandingkan jumlah baris dan
+SHA-256 JSON, lalu baru mengubah `settings.storage` menjadi `tables`. Kalau hasil tidak
+sama, nilainya menjadi `migrate-failed` dan aplikasi tetap memakai `app_documents`.
+Laporan ada di `GET /api/admin/storage` (superadmin). `app_documents` tidak dihapus;
+`updated_at`-nya diberi akhiran `#migrated` dan isinya beku sejak saat itu.
+
+### Backup otomatis (F8)
+
+- Worker terjadwal `business-platform-backup` (`cf/backup-worker.mjs`, dibundel oleh
+  `npm run build` ke `cf-dist-backup/worker.js`) jalan tiap hari 19:00 UTC (02:00 WIB):
+  semua tabel aplikasi (tanpa sessions/rate_limits) disalin dalam satu batch D1 ke KV
+  `BACKUPS` dengan kunci `backup/<waktu>.json`, kedaluwarsa otomatis setelah 14 hari.
+- Binding Worker: `DB` = D1 produksi, `BACKUPS` = KV backup. Pages project juga perlu
+  binding `BACKUPS` (production dan preview) untuk endpoint di bawah.
+- Superadmin: `GET /api/backups` (daftar), `POST /api/backups` (buat sekarang),
+  `GET /api/backups/<nama>.json` (unduh). Ada juga di menu Kelola User. Unduhan dan
+  pembuatan backup masuk log audit. File berisi hash password: simpan di tempat aman.
+- Pemulihan: `node scripts/restore-backup.mjs backup.json > restore.sql`, lalu
+  `npx wrangler d1 execute business-platform --remote --file restore.sql`. Skrip itu
+  mengosongkan lalu mengisi ulang setiap tabel yang ada di backup. Coba dulu di
+  database preview.
+
+## Dokumentasi proyek (foto & video)
+
+- Tombol **Dokumentasi** di kartu proyek (dan di kartu proyek customer). Foto JPG/PNG/WEBP dikompres di browser (sisi terpanjang 1920 px, JPEG) sebelum diunggah. Batasnya 15 MB per foto dan 100 MB per video (MP4/WEBM/MOV).
+- Siapa yang bisa apa:
+  - Melihat: semua yang bisa melihat proyeknya. Anggota hanya proyek yang dia pegang atau buat; customer hanya proyek yang ditautkan ke akunnya (asumsi, bisa diubah di `ACCESS`/`canSeeProject`).
+  - Mengunggah: superadmin, admin, dan anggota.
+  - Menghapus: pengunggahnya, admin, dan superadmin.
+- Jenis file dicek dari byte awal isinya, bukan dari nama file atau klaim browser.
+- Upload dikirim per potongan 8 MiB (`POST .../media`, `PUT .../media/:mid/chunks/:n`, `POST .../media/:mid/complete`). Dengan begitu tidak ada request yang mendekati batas body Workers (100 MB) atau memori Worker (128 MB).
+- Penyimpanan:
+  - Metadata ada di tabel D1 `project_media` (migrasi 0004).
+  - Isi file disimpan di KV `FILES` sebagai `media/<id>/<n>`. Satu value KV maksimal 25 MiB.
+  - Batas KV: free plan 1 GB total dan 1.000 tulis per hari (video 100 MB = 13 tulis); paket berbayar jauh lebih longgar.
+  - R2 bisa menggantikan KV nanti. Yang perlu diubah hanya `putChunk`/`readChunk`/`dropBlobs` di `media.js` dan streaming di `cf/entry.mjs`. Tabel tidak berubah.
+- File diputar dan diunduh lewat `GET /api/projects/:id/media/:mid/raw`, yang wajib sesi dan cek akses proyek. Route ini mendukung `Range`, jadi video bisa dimajukan atau dimundurkan.
+  - Di Cloudflare, Express hanya menulis rencana potongan ke header internal `X-BP-Stream`. `cf/entry.mjs` lalu men-stream potongan KV satu per satu, sehingga video tidak pernah dimuat utuh di memori. Header itu dihapus sebelum respons dikirim.
+- Upload yang tidak selesai dihapus setelah 24 jam (saat ada upload baru di proyek yang sama). Menghapus proyek ikut menghapus dokumentasinya.
+
+## Log aktivitas
+
+- Menu **Log Aktivitas** dan `GET /api/audit` hanya untuk superadmin; role lain mendapat 403.
+- Filter: `user`, `aksi` (awalan, misalnya `dokumentasi`), `dari`/`sampai` (tanggal WIB), `limit`/`offset`. Jumlah total ada di header `X-Total-Count`.
+- Yang dicatat:
+  - Setiap aksi tulis yang lolos cek akses, termasuk yang gagal validasi (ditandai `gagal (kode)`).
+  - Login berhasil dan gagal, logout, ganti password.
+  - Export, dan unduhan nota, invoice, serta backup.
+  - Kolom: waktu, user, role, aksi, entitas, id, ringkasan, IP.
+- Ringkasan berisi field yang dikirim. Password, token, hash, tanda tangan, dan data gambar diganti `[disembunyikan]`.
+- Entri info bayar F3 tetap ada di tabel yang sama dengan nilai sebelum/sesudah.
+- Tidak ada route untuk menghapus log.
+- Migrasi 0004 menambah kolom `role`, `entity`, `summary`, `ip` dan indeks. Sebelum migrasi diterapkan, kode tetap menulis ke kolom lama.

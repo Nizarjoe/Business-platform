@@ -483,7 +483,14 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
   <div class="ptitle"><h2>👥 Kelola User</h2></div>
   <div class="panel">
     <h3>➕ Tambah User Baru</h3>
-    <p style="font-size:.78rem;color:#666;margin:4px 0 8px">Role menentukan menu yang bisa diakses: superadmin (semua), admin (tanpa kelola user), anggota (proyek+kas+WA), medsos (planner+sosmed), customer (lihat proyek & bayar).</p>
+    <p style="font-size:.78rem;color:#666;margin:4px 0 4px">Role menentukan menu dan data yang bisa diakses:</p>
+    <ul id="roleHelp" style="font-size:.78rem;color:#666;margin:0 0 8px 18px;line-height:1.5">
+      <li><b>superadmin</b>: semua menu, Kelola User, backup dan log audit, ubah info pembayaran (QRIS, rekening), status bayar, dan catat pembayaran/invoice.</li>
+      <li><b>admin</b>: semua menu kecuali Kelola User; tidak bisa mengubah info pembayaran, status bayar, atau pembayaran. Bisa menyetujui konten.</li>
+      <li><b>anggota</b>: hanya proyek yang dia pegang sebagai PIC (nama PIC harus sama dengan username) atau yang dia buat, lampiran proyek itu, dan WA. Tanpa Kas.</li>
+      <li><b>medsos</b>: planner dan sosmed, lihat proyek. Konten harus disetujui superadmin/admin sebelum tayang.</li>
+      <li><b>customer</b>: hanya proyek yang ditautkan ke akunnya, unduh nota dan invoice, lihat info pembayaran.</li>
+    </ul>
     <div class="frm2">
       <div><label>Username Baru</label><input id="nu_name" placeholder="cth: teknisi1"></div>
       <div><label>Role</label><select id="nu_role"><option>anggota</option><option>admin</option><option>medsos</option><option>customer</option><option>superadmin</option></select></div>
@@ -493,7 +500,7 @@ input:focus,select:focus,textarea:focus{outline:none;box-shadow:3px 3px 0 var(--
   <div class="tbl-wrap"><table id="tUsers"></table></div>
   <div class="panel" style="margin-top:14px">
     <h3>Backup data</h3>
-    <p style="font-size:.78rem;color:#666;margin:4px 0 8px">Backup otomatis tiap hari pukul 02:00 WIB, disimpan 14 hari. File berisi semua data termasuk hash password: simpan di tempat aman.</p>
+    <p style="font-size:.78rem;color:#666;margin:4px 0 8px">Backup otomatis harian (02:00 WIB) berjalan setelah jadwal cron dipasang; sampai saat itu pakai tombol di bawah. Backup disimpan 14 hari. File berisi semua data termasuk hash password: simpan di tempat aman.</p>
     <div class="flex" style="gap:8px"><button class="btn blue" id="btnBackup" onclick="runBackup()">Buat backup sekarang</button></div>
     <div class="tbl-wrap" style="margin-top:10px"><table id="tBackups"></table></div>
   </div>

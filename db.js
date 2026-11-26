@@ -196,8 +196,39 @@ function saveDoc(id, data) {
   return lock(() => writeDocUnlocked(id, data));
 }
 
+// Cloudflare: requests run in many isolates, so the in-memory lock cannot
+// serialize writes. Compare-and-swap on updated_at instead and retry on conflict.
+async function cfReadVersioned(id) {
+  const row = await CF.DB.prepare('select data, updated_at from app_documents where id = ?').bind(id).first();
+  return row ? { data: JSON.parse(row.data), version: row.updated_at } : { data: undefined, version: null };
+}
+
+async function cfWriteIfUnchanged(id, data, version) {
+  const now = new Date().toISOString() + '#' + Math.random().toString(36).slice(2, 8);
+  const r = version === null
+    ? await CF.DB.prepare('insert into app_documents (id, data, updated_at) values (?1, ?2, ?3) on conflict(id) do nothing')
+        .bind(id, JSON.stringify(data), now).run()
+    : await CF.DB.prepare('update app_documents set data = ?2, updated_at = ?3 where id = ?1 and updated_at = ?4')
+        .bind(id, JSON.stringify(data), now, version).run();
+  return r.meta.changes === 1;
+}
+
+// step(data) returns { store, result }: the document to write and the value to hand back.
+async function cfUpdate(id, fallback, step) {
+  for (let attempt = 0; attempt < 15; attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, 15 + Math.random() * 40 * attempt));
+    const { data: current, version } = await cfReadVersioned(id);
+    let data = current;
+    if (data === undefined || data === null) data = typeof fallback === 'function' ? fallback() : clone(fallback);
+    const { store, result } = await step(data);
+    if (await cfWriteIfUnchanged(id, store, version)) return { store, result };
+  }
+  throw new Error('Data sedang diubah bersamaan, coba lagi');
+}
+
 // Read, mutate in place, and write as one locked step.
 function update(mutator) {
+  if (CF) return cfUpdate(DOC_MAIN, seedData, async db => ({ store: db, result: await mutator(db) })).then(r => r.result);
   return lock(async () => {
     const db = await readMainUnlocked();
     const result = await mutator(db);
@@ -207,6 +238,12 @@ function update(mutator) {
 }
 
 function updateDoc(id, fallback, mutator) {
+  if (CF) {
+    return cfUpdate(id, fallback, async data => {
+      const next = await mutator(data);
+      return { store: next === undefined ? data : next };
+    }).then(r => r.store);
+  }
   return lock(async () => {
     let data = await readDocUnlocked(id);
     if (data === undefined || data === null) {

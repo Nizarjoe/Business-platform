@@ -33,8 +33,16 @@ if ((SUPABASE_URL && !SUPABASE_SERVICE_ROLE_KEY) || (!SUPABASE_URL && SUPABASE_S
   throw new Error('Set both SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, or leave both unset to use local files.');
 }
 
+// Cloudflare Pages: the worker entry (cf/entry.mjs) sets globalThis.__CF_ENV to
+// the bindings before this module loads. DB is a D1 database with the same
+// app_documents table as Supabase; FILES is a KV namespace for photos/QRIS.
+const CF = globalThis.__CF_ENV && globalThis.__CF_ENV.DB && globalThis.__CF_ENV.FILES
+  ? globalThis.__CF_ENV
+  : null;
+const CF_PREFIX = '/files/';
+
 let supabase = null;
-if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+if (!CF && SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
   const { createClient } = require('@supabase/supabase-js');
   supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
@@ -42,7 +50,11 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
 }
 
 function usingRemote() {
-  return Boolean(supabase);
+  return Boolean(supabase || CF);
+}
+
+function usingCloudflare() {
+  return Boolean(CF);
 }
 
 function clone(v) {
@@ -70,6 +82,9 @@ function seedData() {
 // the previous synchronous behavior: each mutation finishes before the next.
 let tail = Promise.resolve();
 function lock(fn) {
+  // Workers: a promise chain shared across requests hangs the runtime, and the
+  // in-memory queue cannot protect isolates on other machines anyway.
+  if (CF) return Promise.resolve().then(fn);
   const run = tail.then(() => fn());
   tail = run.then(() => {}, () => {});
   return run;
@@ -91,6 +106,10 @@ function writeJsonFile(file, data) {
 }
 
 async function readRow(id) {
+  if (CF) {
+    const row = await CF.DB.prepare('select data from app_documents where id = ?').bind(id).first();
+    return row ? JSON.parse(row.data) : undefined;
+  }
   const { data, error } = await supabase
     .from('app_documents')
     .select('data')
@@ -102,6 +121,13 @@ async function readRow(id) {
 }
 
 async function writeRow(id, data) {
+  if (CF) {
+    await CF.DB.prepare(
+      'insert into app_documents (id, data, updated_at) values (?1, ?2, ?3) ' +
+      'on conflict(id) do update set data = excluded.data, updated_at = excluded.updated_at'
+    ).bind(id, JSON.stringify(data), new Date().toISOString()).run();
+    return;
+  }
   const { error } = await supabase
     .from('app_documents')
     .upsert(
@@ -112,7 +138,7 @@ async function writeRow(id, data) {
 }
 
 async function readMainUnlocked() {
-  if (!supabase) {
+  if (!usingRemote()) {
     if (!fs.existsSync(DB_FILE)) {
       const seed = seedData();
       writeJsonFile(DB_FILE, seed);
@@ -130,7 +156,7 @@ async function readMainUnlocked() {
 }
 
 async function writeMainUnlocked(db) {
-  if (!supabase) writeJsonFile(DB_FILE, db);
+  if (!usingRemote()) writeJsonFile(DB_FILE, db);
   else await writeRow(DOC_MAIN, db);
 }
 
@@ -141,7 +167,7 @@ function localDocPath(id) {
 }
 
 async function readDocUnlocked(id) {
-  if (!supabase) {
+  if (!usingRemote()) {
     const file = localDocPath(id);
     if (!fs.existsSync(file)) return undefined;
     return readJsonFile(file);
@@ -150,7 +176,7 @@ async function readDocUnlocked(id) {
 }
 
 async function writeDocUnlocked(id, data) {
-  if (!supabase) writeJsonFile(localDocPath(id), data);
+  if (!usingRemote()) writeJsonFile(localDocPath(id), data);
   else await writeRow(id, data);
 }
 
@@ -218,6 +244,7 @@ async function ensureBucket() {
 }
 
 async function initPersistence() {
+  if (CF) return { mode: 'cloudflare' };
   if (!supabase) return { mode: 'local' };
   const { error } = await supabase.from('app_documents').select('id').limit(1);
   if (error) {
@@ -230,6 +257,10 @@ async function initPersistence() {
 }
 
 async function uploadObject(objectPath, body, contentType) {
+  if (CF) {
+    await CF.FILES.put(objectPath, body, { metadata: { contentType: contentType || 'application/octet-stream' } });
+    return CF_PREFIX + objectPath.split('/').map(encodeURIComponent).join('/');
+  }
   if (!supabase) throw new Error('Supabase storage is not configured');
   const { error } = await supabase.storage.from(BUCKET).upload(objectPath, body, {
     contentType: contentType || 'application/octet-stream',
@@ -250,8 +281,24 @@ function objectPathFromPublicUrl(url) {
   return decodeURIComponent(parsed.pathname.slice(i + marker.length));
 }
 
+// Cloudflare mode: KV object behind a /files/... URL. Returns null otherwise.
+function cfKeyFromUrl(url) {
+  if (!CF || typeof url !== 'string' || !url.startsWith(CF_PREFIX)) return null;
+  try { return url.slice(CF_PREFIX.length).split('/').map(decodeURIComponent).join('/'); } catch (e) { return null; }
+}
+
+async function getObject(url) {
+  const key = cfKeyFromUrl(url);
+  if (!key) return null;
+  const { value, metadata } = await CF.FILES.getWithMetadata(key, 'arrayBuffer');
+  if (!value) return null;
+  return { body: Buffer.from(value), contentType: (metadata && metadata.contentType) || 'application/octet-stream' };
+}
+
 async function removeStored(url) {
   if (!url) return;
+  const cfKey = cfKeyFromUrl(url);
+  if (cfKey) { await CF.FILES.delete(cfKey); return; }
   if (supabase && /^https?:\/\//i.test(url)) {
     const objectPath = objectPathFromPublicUrl(url);
     if (!objectPath) return;
@@ -269,6 +316,6 @@ async function removeStored(url) {
 
 module.exports = {
   load, save, loadDoc, saveDoc, update, updateDoc, readOrSeed,
-  uploadObject, removeStored, usingRemote, initPersistence,
+  uploadObject, removeStored, usingRemote, usingCloudflare, getObject, initPersistence,
   DB_FILE, DATA_DIR, UPLOADS_DIR, ADMIN_WA, BUCKET
 };

@@ -2,10 +2,12 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const PDFDocument = require('pdfkit');
+const pdfkit = require('pdfkit');
+// Node build exports the class; the Workers (browser) build is an ES module.
+const PDFDocument = pdfkit.default || pdfkit;
 const {
   load, update, loadDoc, updateDoc, readOrSeed,
-  uploadObject, removeStored, usingRemote, initPersistence,
+  uploadObject, removeStored, usingRemote, usingCloudflare, getObject, initPersistence,
   UPLOADS_DIR, ADMIN_WA
 } = require('./db');
 
@@ -38,7 +40,14 @@ app.get('/qris.jpg', async (req, res, next) => {
   try {
     if (usingRemote()) {
       const meta = await loadDoc('qris-meta');
-      if (meta && meta.imageUrl) {
+      const stored = meta && meta.imageUrl && usingCloudflare() ? await getObject(meta.imageUrl) : null;
+      if (stored) {
+        res.set('Content-Type', stored.contentType);
+        res.set('Cache-Control', 'no-store');
+        res.send(stored.body);
+        return;
+      }
+      if (meta && meta.imageUrl && !usingCloudflare()) {
         const r = await fetch(meta.imageUrl);
         if (r.ok) {
           res.set('Content-Type', r.headers.get('content-type') || 'image/jpeg');
@@ -59,6 +68,29 @@ app.get('/qris.jpg', async (req, res, next) => {
   }
 });
 
+// Cloudflare Pages has no filesystem: cf/entry.mjs embeds public/ as
+// globalThis.__PUBLIC_ASSETS ({ '/index.html': { type, b64 } }) and KV holds uploads.
+const EMBEDDED = globalThis.__PUBLIC_ASSETS || null;
+const publicFile = name => EMBEDDED
+  ? (EMBEDDED['/' + name] ? Buffer.from(EMBEDDED['/' + name].b64, 'base64') : null)
+  : path.join(__dirname, 'public', name);
+if (EMBEDDED) {
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    const a = EMBEDDED[req.path === '/' ? '/index.html' : req.path];
+    if (!a) return next();
+    res.set('Content-Type', a.type);
+    if (a.type.startsWith('text/html')) res.set('Cache-Control', 'no-cache');
+    res.send(Buffer.from(a.b64, 'base64'));
+  });
+  app.get(/^\/files\/.+/, async (req, res) => {
+    const stored = await getObject(req.path);
+    if (!stored) return res.status(404).send('Not found');
+    res.set('Content-Type', stored.contentType);
+    res.set('Cache-Control', 'private, max-age=300');
+    res.send(stored.body);
+  });
+}
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
@@ -320,7 +352,7 @@ function kop(doc, title) {
   doc.rect(50, 40, w, 74).fill(C.yellow);
   doc.rect(50, 40, 8, 74).fill(C.pink);
   try {
-    doc.image(path.join(__dirname, 'public', 'logo.jpg'), 62, 47, { fit: [150, 60] });
+    doc.image(publicFile('logo.jpg'), 62, 47, { fit: [150, 60] });
   } catch (e) {}
   doc.font('Helvetica-Bold').fontSize(22).fillColor(C.ink).text('KUDOSTACK', 225, 55);
   doc.fontSize(9).font('Helvetica').fillColor('#444').text('OFFICIAL REPORT — Kontak Admin: ' + ADMIN_WA, 225, 83);
@@ -399,6 +431,10 @@ async function resolveImage(src) {
       const r = await fetch(src);
       if (!r.ok) return null;
       return Buffer.from(await r.arrayBuffer());
+    }
+    if (usingCloudflare()) {
+      const stored = await getObject(src);
+      return stored ? stored.body : null;
     }
     if (!src.startsWith('/uploads/')) return null;
     const abs = path.resolve(UPLOADS_DIR, path.basename(src));
@@ -896,7 +932,13 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Terjadi kesalahan server' });
 });
 
-initPersistence().then(info => {
+module.exports = app;
+
+if (usingCloudflare()) {
+  // cf/entry.mjs hands requests to this listener through httpServerHandler.
+  // No I/O here: Workers forbid it during module initialization.
+  app.listen(PORT);
+} else initPersistence().then(info => {
   app.listen(PORT, '0.0.0.0', () => {
     const where = info.mode === 'supabase' ? `supabase bucket ${info.bucket}` : 'local files';
     console.log(`Kudostack Admin Hub running on http://0.0.0.0:${PORT} (${where})`);

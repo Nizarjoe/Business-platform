@@ -48,3 +48,15 @@ The script upserts `data/db.json`, imports the other JSON files in `data/` when 
 | `SUPABASE_SERVICE_ROLE_KEY` | for hosted mode | Server-only service role key |
 | `SUPABASE_BUCKET` | no | Storage bucket, default `uploads` |
 | `PORT` | set by Render | HTTP port. Local default is 3000 |
+
+## Deploy on Cloudflare Pages (D1 + KV)
+
+Cloudflare mode needs no Supabase key. `cf/entry.mjs` runs the same Express app through `httpServerHandler`, stores the JSON documents in D1 (`DB`, table `app_documents` from `migrations/`) and photos/QRIS in KV (`FILES`, served at `/files/...`).
+
+```bash
+node scripts/build-cf.mjs          # writes cf-dist/_worker.js (public/ embedded)
+npx wrangler d1 migrations apply business-platform --remote
+npx wrangler pages deploy cf-dist --project-name business-platform
+```
+
+The Pages project needs compatibility date `2025-11-01`, flags `nodejs_compat`, `enable_nodejs_http_modules`, `enable_nodejs_http_server_modules`, a D1 binding `DB` and a KV binding `FILES`.

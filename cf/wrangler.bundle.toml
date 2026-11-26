@@ -1,0 +1,14 @@
+# Only used by scripts/build-cf.mjs to bundle cf/entry.mjs with wrangler's
+# nodejs_compat polyfills. The deployed project config is ../wrangler.toml.
+name = "business-platform-bundle"
+main = "entry.mjs"
+compatibility_date = "2025-11-01"
+compatibility_flags = ["nodejs_compat", "enable_nodejs_http_modules", "enable_nodejs_http_server_modules"]
+no_bundle = false
+
+[define]
+"__dirname" = "\"/bundle\""
+"import.meta.url" = "\"file:///bundle/entry.mjs\""
+
+[alias]
+"png-js" = "../node_modules/png-js/lib/png-js.js"
